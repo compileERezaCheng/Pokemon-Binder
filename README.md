@@ -34,7 +34,9 @@ There are two ways to start the web interface:
 
 #### Option A: Run Silently in the Background (No Terminal Window) ✨
 1. Double-click **`run_server.vbs`** in the project folder. This will launch the server completely in the background and open your web browser.
-2. To stop the background server at any time, double-click **`stop_server.bat`** in the project folder.
+2. To stop the background server at any time, you can:
+   - **From the Web App**: Click the **"Stop Server"** button at the bottom of the sidebar footer.
+   - **From local files**: Double-click **`stop_server.bat`** in the project folder.
 
 #### Option B: Run with a Visible Terminal Window
 1. Double-click **`run_server.bat`** in the project folder.
