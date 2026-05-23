@@ -226,7 +226,7 @@ def find_pokemon(query, db):
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 config = json.load(f)
                 # Ensure all keys are present
                 for k, v in DEFAULT_CONFIG.items():
@@ -239,8 +239,8 @@ def load_config():
 
 def save_config(config):
     try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
     except Exception as e:
         print(f"{CLR_FAIL}[!] Error saving configuration: {e}{CLR_RESET}")
 
