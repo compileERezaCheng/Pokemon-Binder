@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokémon Binder Manager</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="index.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <div class="pokeball-icon-container">
+                    <svg class="pokeball-svg" viewBox="0 0 100 100" width="36" height="36">
+                        <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
+                        <line x1="5" y1="50" x2="95" y2="50" stroke="currentColor" stroke-width="8"/>
+                        <circle cx="50" cy="50" r="18" fill="var(--bg-card)" stroke="currentColor" stroke-width="8"/>
+                        <circle cx="50" cy="50" r="6" fill="currentColor"/>
+                    </svg>
+                </div>
+                <h2>PokeBinder</h2>
+            </div>
+            
+            <nav class="nav-menu">
+                <button id="nav-btn-binder" class="nav-item active" onclick="switchTab('binder')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2zm0 8H7v-2h10v2z"/>
+                    </svg>
+                    <span>Binder Grid</span>
+                </button>
+                <button id="nav-btn-list" class="nav-item" onclick="switchTab('list')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M4 14h6v-6H4v6zm0 7h6v-6H4v6zm7-7h9v-2h-9v2zm0 7h9v-2h-9v2zM4 4v2h16V4H4z"/>
+                    </svg>
+                    <span>Collection List</span>
+                </button>
+                <button id="nav-btn-add" class="nav-item" onclick="switchTab('add')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    <span>Add Pokémon</span>
+                </button>
+                <button id="nav-btn-settings" class="nav-item" onclick="switchTab('settings')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button id="sync-now-sidebar-btn" class="sync-button" onclick="triggerManualSync()">
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                        <path fill="currentColor" d="M19 8l-4 4h3c0 3.31-2.69 6-6 6-1.01 0-1.97-.25-2.8-.7l-1.46 1.46C8.97 19.54 10.43 20 12 20c4.42 0 8-3.58 8-8h3l-4-4zM6 12c0-3.31 2.69-6 6-6 1.01 0 1.97.25 2.8.7l1.46-1.46C15.03 4.46 13.57 4 12 4c-4.42 0-8 3.58-8 8H1l4 4 4-4H6z"/>
+                    </svg>
+                    <span>Sync Google Sheets</span>
+                </button>
+                <div class="api-status">
+                    <span class="status-dot online"></span>
+                    <span class="status-text">Connected locally</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Panel -->
+        <main class="main-content">
+            <!-- Top Dashboard Stats Header -->
+            <header class="dashboard-header">
+                <div class="header-title">
+                    <h1 id="page-title">Binder Grid</h1>
+                    <p class="subtitle" id="page-subtitle">Visual pocket view of your card collection</p>
+                </div>
+                
+                <div class="stats-container">
+                    <div class="stat-card">
+                        <span class="stat-label">Total Cards</span>
+                        <h3 id="stat-total-cards">0</h3>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Completeness</span>
+                        <h3 id="stat-completion">0%</h3>
+                        <div class="stat-progress-bar">
+                            <div id="stat-progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Google Sheets Sync</span>
+                        <span id="stat-sync-mode" class="badge disabled">Local Only</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Notifications Area -->
+            <div id="notification-toast" class="notification-toast hidden">
+                <span class="toast-message"></span>
+            </div>
+
+            <!-- VIEW 1: BINDER GRID -->
+            <section id="view-binder" class="view-section active">
+                <div class="section-actions">
+                    <!-- Page controls -->
+                    <div class="pagination-controls">
+                        <button class="action-btn" onclick="changePage(-2)">
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
+                            Prev
+                        </button>
+                        <div class="page-indicator-wrapper">
+                            <span>Go to Page:</span>
+                            <input type="number" id="binder-page-input" min="1" max="1000" value="1" onchange="jumpToPage(this.value)" style="width: 55px;">
+                            <span>(Spread: <strong id="binder-page-range">1 - 2</strong> of <strong id="binder-max-page">2</strong>)</span>
+                        </div>
+                        <button class="action-btn" onclick="changePage(2)">
+                            Next
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                        </button>
+                    </div>
+                    
+                    <div class="filter-controls">
+                        <span class="muted-label" id="grid-layout-label">Grid Layout: 3x3</span>
+                    </div>
+                </div>
+
+                <!-- Binder Book Wrapper -->
+                <div class="binder-book-container">
+                    <div class="binder-book">
+                        <!-- Left Page -->
+                        <div class="binder-page left-page">
+                            <div class="page-number-banner">Page <span id="left-page-num">1</span></div>
+                            <div id="left-binder-grid" class="binder-grid-inner">
+                                <!-- Left page slots dynamically inserted -->
+                            </div>
+                        </div>
+
+                        <!-- Central Binder Spine -->
+                        <div class="binder-spine">
+                            <div class="binder-ring"></div>
+                            <div class="binder-ring"></div>
+                            <div class="binder-ring"></div>
+                        </div>
+
+                        <!-- Right Page -->
+                        <div class="binder-page right-page">
+                            <div class="page-number-banner">Page <span id="right-page-num">2</span></div>
+                            <div id="right-binder-grid" class="binder-grid-inner">
+                                <!-- Right page slots dynamically inserted -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VIEW 2: COLLECTION LIST -->
+            <section id="view-list" class="view-section">
+                <div class="table-toolbar">
+                    <div class="search-box-wrapper">
+                        <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" id="list-search" placeholder="Search by name, ID, notes..." oninput="filterCollection()">
+                    </div>
+                    <div class="filter-dropdowns">
+                        <select id="filter-condition" onchange="filterCollection()">
+                            <option value="">All Conditions</option>
+                            <option value="NM">Near Mint (NM)</option>
+                            <option value="LP">Lightly Played (LP)</option>
+                            <option value="MP">Moderately Played (MP)</option>
+                            <option value="HP">Heavily Played (HP)</option>
+                        </select>
+                        <select id="sort-by" onchange="filterCollection()">
+                            <option value="location">Sort by Page & Slot</option>
+                            <option value="dex">Sort by Dex Number</option>
+                            <option value="name">Sort by Name</option>
+                            <option value="date">Sort by Date Added</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="collection-table">
+                        <thead>
+                            <tr>
+                                <th>Card</th>
+                                <th>Dex #</th>
+                                <th>Binder Position</th>
+                                <th>Condition</th>
+                                <th>Notes</th>
+                                <th>Date Added</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="collection-table-body">
+                            <!-- Rows will be dynamically populated -->
+                        </tbody>
+                    </table>
+                    <div id="no-cards-found" class="no-cards-placeholder hidden">
+                        <div class="placeholder-icon">🔍</div>
+                        <h3>No matching cards found</h3>
+                        <p>Try searching another name or reset filters.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VIEW 3: ADD POKÉMON -->
+            <section id="view-add" class="view-section">
+                <div class="form-container">
+                    <div class="form-main">
+                        <h2 class="form-section-title">Card Identification</h2>
+                        <div class="form-group">
+                            <label for="add-search-input">Search Pokémon (Name or Dex ID)</label>
+                            <div class="autocomplete-wrapper">
+                                <input type="text" id="add-search-input" placeholder="e.g. Charizard or 6" autocomplete="off" oninput="handleAutocomplete(this.value)">
+                                <div id="autocomplete-suggestions" class="autocomplete-suggestions-box hidden"></div>
+                            </div>
+                        </div>
+
+                        <!-- Card Metadata details -->
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="add-condition">Condition</label>
+                                <select id="add-condition">
+                                    <option value="NM">Near Mint (NM)</option>
+                                    <option value="LP">Lightly Played (LP)</option>
+                                    <option value="MP">Moderately Played (MP)</option>
+                                    <option value="HP">Heavily Played (HP)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="add-notes">Custom Notes</label>
+                                <input type="text" id="add-notes" placeholder="e.g. Holo, Reverse Holo, Base Set...">
+                            </div>
+                        </div>
+
+                        <h2 class="form-section-title">Binder Placement</h2>
+                        <div class="suggested-banner hidden" id="suggested-banner">
+                            <div class="banner-icon">📍</div>
+                            <div class="banner-text">
+                                <span class="banner-label">Suggested Position:</span>
+                                <span class="banner-val" id="suggested-position-text">Page 1, Slot 1 (Dex Order)</span>
+                            </div>
+                        </div>
+
+                        <div class="slot-warning-banner hidden" id="slot-warning-banner">
+                            <div class="banner-icon">⚠️</div>
+                            <div class="banner-text">
+                                <span class="banner-label">Slot Occupied:</span>
+                                <span class="banner-val" id="slot-occupied-info">Occupied by Bulbasaur</span>
+                                <span class="banner-subtext">Adding this card will stack it behind the current card in the same pocket.</span>
+                            </div>
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="add-page">Page Number</label>
+                                <input type="number" id="add-page" min="1" value="1" oninput="checkSlotOccupation()">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-slot">Slot Number</label>
+                                <input type="number" id="add-slot" min="1" value="1" oninput="checkSlotOccupation()">
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button class="btn-primary" onclick="submitAddCard()">
+                                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                                Add Card to Binder
+                            </button>
+                            <button class="btn-secondary" onclick="resetAddCardForm()">Clear Form</button>
+                        </div>
+                    </div>
+
+                    <!-- Holographic Preview Area -->
+                    <div class="card-preview-area">
+                        <div class="pokemon-card-container">
+                            <div class="pokemon-card-preview" id="card-preview-element">
+                                <div class="card-inner">
+                                    <div class="card-front">
+                                        <div class="card-image-frame">
+                                            <img id="preview-image" src="" alt="Card Back" class="card-back-logo">
+                                            <!-- CSS Drawn Pokeball fallback when no image -->
+                                            <div id="preview-image-placeholder" class="card-placeholder-pokeball">
+                                                <div class="pokeball-circle"></div>
+                                            </div>
+                                        </div>
+                                        <div class="card-header">
+                                            <span class="card-name" id="preview-name">Select Pokémon</span>
+                                            <span class="card-dex-number" id="preview-dex-id">#???</span>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="card-spec">
+                                                <span>Condition:</span>
+                                                <span class="badge NM" id="preview-badge-cond">NM</span>
+                                            </div>
+                                            <div class="card-spec">
+                                                <span>Placement:</span>
+                                                <span id="preview-location-text">Page 1, Slot 1</span>
+                                            </div>
+                                            <div class="card-notes-preview" id="preview-notes-text">No notes added.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VIEW 4: SETTINGS -->
+            <section id="view-settings" class="view-section">
+                <div class="settings-grid">
+                    <div class="settings-box">
+                        <h2>Binder Configurations</h2>
+                        <p class="muted-text">Customize your visual binder sheet geometry and default ordering logic.</p>
+                        
+                        <div class="settings-form">
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label for="settings-rows">Rows Per Page</label>
+                                    <input type="number" id="settings-rows" min="1" max="10" value="3">
+                                </div>
+                                <div class="form-group">
+                                    <label for="settings-cols">Columns Per Page</label>
+                                    <input type="number" id="settings-cols" min="1" max="10" value="3">
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="settings-mode">Default Sorting Placement</label>
+                                <select id="settings-mode">
+                                    <option value="dex">National Pokédex Order (Bulbasaur in Page 1 Slot 1, etc.)</option>
+                                    <option value="sequential">Sequential Fill Order (Fills first open pocket left-to-right)</option>
+                                </select>
+                            </div>
+                            
+                            <button class="btn-primary" onclick="saveSettings()">Save Configuration</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-box">
+                        <h2>Google Sheets Sync Settings</h2>
+                        <p class="muted-text">Automatically synchronize your card binder metadata rows to a Google Spreadsheet.</p>
+                        
+                        <div class="settings-form">
+                            <div class="form-group toggle-group">
+                                <label class="switch-label" for="settings-gsheet-toggle">
+                                    <input type="checkbox" id="settings-gsheet-toggle" onchange="toggleGsheetNameInput()">
+                                    <span class="switch-custom"></span>
+                                    Enable Google Sheets Synchronization
+                                </label>
+                            </div>
+                            
+                            <div class="form-group" id="gsheet-name-group">
+                                <label for="settings-gsheet-name">Google Spreadsheet Name</label>
+                                <input type="text" id="settings-gsheet-name" placeholder="e.g. Pokemon Binder">
+                            </div>
+                            
+                            <div class="button-row">
+                                <button class="btn-primary" onclick="saveSettings()">Save & Activate Sync</button>
+                                <button id="sync-now-settings-btn" class="btn-secondary" onclick="triggerManualSync()">
+                                    Sync Collection Now
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Step-by-Step setup instructions -->
+                        <div class="collapsible-guide">
+                            <button class="guide-toggle" onclick="toggleGuide()">
+                                <span>Google Sheets Setup Guide</span>
+                                <svg class="chevron-icon" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+                            </button>
+                            <div id="guide-content" class="guide-content hidden">
+                                <ol>
+                                    <li>Open the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create a new project.</li>
+                                    <li>Enable the <strong>Google Sheets API</strong> and <strong>Google Drive API</strong> inside your project.</li>
+                                    <li>Go to <strong>Credentials</strong> &rarr; Click <strong>+ CREATE CREDENTIALS</strong> &rarr; Select <strong>Service Account</strong>.</li>
+                                    <li>Navigate to the created Service Account's <strong>Keys</strong> tab, click <strong>Add Key</strong> &rarr; <strong>Create new key</strong> &rarr; select <strong>JSON</strong>.</li>
+                                    <li>Download the JSON credentials file, rename it exactly to <code>credentials.json</code>, and place it in the same directory as your Python files.</li>
+                                    <li>Create a Google Spreadsheet (e.g. named "Pokemon Binder") in your Google Drive.</li>
+                                    <li>Click <strong>Share</strong> in your Google Sheet and add the Service Account's email address (found inside your JSON key under <code>client_email</code>) with <strong>Editor</strong> permission.</li>
+                                    <li>Ensure the Spreadsheet Name matches your Google Sheets Sync setting exactly!</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL: CARD VIEW DETAILS -->
+    <div id="card-modal" class="modal-overlay hidden" onclick="closeCardModal(event)">
+        <div class="modal-card-content" onclick="event.stopPropagation()">
+            <button class="modal-close-btn" onclick="closeCardModal()">
+                <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="modal-body-layout">
+                <div class="modal-card-visual">
+                    <div class="pokemon-card-container active">
+                        <div class="pokemon-card-preview" id="modal-card-element">
+                            <div class="card-inner">
+                                <div class="card-front">
+                                    <div class="card-image-frame">
+                                        <img id="modal-pokemon-image" src="" alt="Pokémon Sprite" class="pokemon-artwork">
+                                    </div>
+                                    <div class="card-header">
+                                        <span class="card-name" id="modal-pokemon-name">Pokémon Name</span>
+                                        <span class="card-dex-number" id="modal-pokemon-dex">#???</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="card-spec">
+                                            <span>Condition:</span>
+                                            <span class="badge NM" id="modal-pokemon-condition">NM</span>
+                                        </div>
+                                        <div class="card-spec">
+                                            <span>Position:</span>
+                                            <span id="modal-pokemon-location">Page X, Slot Y</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-card-details">
+                    <h2 id="modal-details-title">Bulbasaur Details</h2>
+                    <p class="muted-text date-label">Added on: <span id="modal-pokemon-date">2026-05-23</span></p>
+                    
+                    <div class="detail-group">
+                        <label>Notes</label>
+                        <div class="notes-content-box" id="modal-pokemon-notes">No notes available for this card.</div>
+                    </div>
+
+                    <!-- Multiple stack items container if stacked -->
+                    <div id="modal-stacked-section" class="hidden">
+                        <label>Cards Stacked in this Pocket</label>
+                        <div class="stacked-cards-list" id="modal-stacked-list"></div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn-danger" id="modal-delete-btn" onclick="deleteCardFromModal()">
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                            Remove from Collection
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="index.js"></script>
+</body>
+</html>

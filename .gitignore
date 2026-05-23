@@ -1,0 +1,14 @@
+# Credentials & API Keys
+credentials.json
+
+# Local Python caches
+__pycache__/
+*.pyc
+
+# Local cover uploads (optional, but keeps repo clean)
+cover_image.png
+
+# Editor settings
+.vscode/
+.idea/
+.antigravitycli/

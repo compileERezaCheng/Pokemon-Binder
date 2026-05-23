@@ -1,0 +1,14 @@
+{
+    "rows": 3,
+    "cols": 3,
+    "mode": "dex",
+    "gsheet_enabled": true,
+    "gsheet_name": "pokemon",
+    "cover_source": "upload",
+    "cover_image_path": "cover_image.png",
+    "cover_title": "Pok\u00e9mon Card Binder",
+    "cover_subtitle": "My Personal Collection Album",
+    "cover_owner": "Dr4g0n",
+    "cover_color": "#ef4444",
+    "cover_featured_dex": 25
+}

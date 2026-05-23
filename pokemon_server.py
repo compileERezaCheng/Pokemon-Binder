@@ -1,0 +1,354 @@
+import http.server
+import socketserver
+import json
+import os
+import sys
+import urllib.parse
+from datetime import datetime
+
+# Add the current directory to sys.path so we can import local modules
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import pokemon_binder
+
+PORT = 8000
+
+class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def end_headers(self):
+        # Prevent caching for development/quick changes
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        super().end_headers()
+
+    def do_GET(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        query = urllib.parse.parse_qs(parsed_url.query)
+
+        # Static files mapping
+        if path == '/' or path == '/index.html':
+            self.serve_file('index.html', 'text/html; charset=utf-8')
+        elif path == '/index.css':
+            self.serve_file('index.css', 'text/css; charset=utf-8')
+        elif path == '/index.js':
+            self.serve_file('index.js', 'application/javascript; charset=utf-8')
+        elif path == '/cover_image.png':
+            self.serve_file('cover_image.png', 'image/png')
+            
+        # API Endpoints
+        elif path == '/api/collection':
+            self.send_json(pokemon_binder.load_collection())
+            
+        elif path == '/api/settings':
+            self.send_json(pokemon_binder.load_config())
+            
+        elif path == '/api/pokemon-db':
+            db = pokemon_binder.load_pokemon_database()
+            self.send_json(db)
+            
+        elif path == '/api/suggest-position':
+            self.handle_suggest_position(query)
+            
+        else:
+            self.send_error(404, "File Not Found")
+
+    def do_POST(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        
+        # Read body content
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            data = json.loads(post_data.decode('utf-8')) if post_data else {}
+        except Exception as e:
+            self.send_json({"success": False, "error": f"Invalid JSON body: {str(e)}"}, status=400)
+            return
+
+        if path == '/api/settings':
+            self.handle_save_settings(data)
+        elif path == '/api/add':
+            self.handle_add_card(data)
+        elif path == '/api/remove':
+            self.handle_remove_card(data)
+        elif path == '/api/sync':
+            self.handle_sync_gspread()
+        elif path == '/api/upload-cover-image':
+            self.handle_upload_cover_image(data)
+        else:
+            self.send_error(404, "API Endpoint Not Found")
+
+    def serve_file(self, filename, content_type):
+        if not os.path.exists(filename):
+            self.send_error(404, f"File {filename} not found")
+            return
+        
+        try:
+            with open(filename, 'rb') as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as e:
+            self.send_error(500, f"Error reading file: {str(e)}")
+
+    def send_json(self, data, status=200):
+        try:
+            response_content = json.dumps(data).encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response_content)))
+            self.end_headers()
+            self.wfile.write(response_content)
+        except Exception as e:
+            # Fallback if serialization fails
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(f"{{\"success\": false, \"error\": \"Serialization failed: {str(e)}\"}}".encode('utf-8'))
+
+    def handle_suggest_position(self, query_params):
+        try:
+            dex_id = int(query_params.get('id', [0])[0])
+        except ValueError:
+            dex_id = 0
+            
+        config = pokemon_binder.load_config()
+        collection = pokemon_binder.load_collection()
+        rows = config.get("rows", 3)
+        cols = config.get("cols", 3)
+        mode = config.get("mode", "dex")
+        
+        # Calculate suggested position
+        if mode == "dex" and dex_id > 0:
+            page, slot = pokemon_binder.get_slot_coordinates(dex_id, rows, cols)
+            position_type = "National Dex position"
+        else:
+            next_idx = pokemon_binder.find_next_sequential_slot(collection, rows, cols)
+            page, slot = pokemon_binder.get_slot_coordinates(next_idx, rows, cols)
+            position_type = "First available binder slot"
+            
+        # Check if slot is occupied
+        occupied_cards = [
+            {"name": c["Name"], "dex": c["Dex Number"], "condition": c["Condition"], "notes": c["Notes"]}
+            for c in collection if c["Page"] == page and c["Slot"] == slot
+        ]
+        
+        self.send_json({
+            "page": page,
+            "slot": slot,
+            "position_type": position_type,
+            "occupied": len(occupied_cards) > 0,
+            "occupied_cards": occupied_cards
+        })
+
+    def handle_save_settings(self, data):
+        config = pokemon_binder.load_config()
+        
+        # Merge incoming settings
+        for key in ["rows", "cols", "mode", "gsheet_enabled", "gsheet_name", 
+                    "cover_title", "cover_subtitle", "cover_owner", "cover_color", "cover_featured_dex"]:
+            if key in data:
+                if key == "rows" or key == "cols":
+                    try:
+                        val = int(data[key])
+                        if val >= 1:
+                            config[key] = val
+                    except ValueError:
+                        pass
+                elif key == "cover_featured_dex":
+                    try:
+                        config[key] = int(data[key])
+                    except ValueError:
+                        config[key] = 0
+                elif key == "gsheet_enabled":
+                    config[key] = bool(data[key])
+                elif key == "mode":
+                    if data[key] in ["dex", "sequential"]:
+                        config[key] = data[key]
+                else:
+                    config[key] = str(data[key]).strip()
+                    
+        pokemon_binder.save_config(config)
+        self.send_json({"success": True, "config": config})
+
+    def handle_upload_cover_image(self, data):
+        image_data = data.get("image_data")
+        if not image_data:
+            self.send_json({"success": False, "error": "No image data received"}, status=400)
+            return
+            
+        try:
+            if "," in image_data:
+                header, base64_str = image_data.split(",", 1)
+            else:
+                base64_str = image_data
+                
+            import base64
+            decoded_bytes = base64.b64decode(base64_str)
+            
+            filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cover_image.png")
+            with open(filepath, "wb") as f:
+                f.write(decoded_bytes)
+                
+            config = pokemon_binder.load_config()
+            config["cover_source"] = "upload"
+            config["cover_image_path"] = "cover_image.png"
+            pokemon_binder.save_config(config)
+            
+            self.send_json({"success": True, "config": config})
+        except Exception as e:
+            self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
+
+    def handle_add_card(self, data):
+        # Validate data
+        name = data.get("name", "").strip().lower()
+        if not name:
+            self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
+            return
+            
+        try:
+            dex_id = int(data.get("dex_id", 0))
+        except ValueError:
+            dex_id = 0
+            
+        try:
+            page = int(data.get("page", 1))
+            slot = int(data.get("slot", 1))
+            if page < 1 or slot < 1:
+                raise ValueError
+        except ValueError:
+            self.send_json({"success": False, "error": "Invalid Page or Slot coordinates"}, status=400)
+            return
+            
+        condition = data.get("condition", "NM").strip().upper()
+        if condition not in ["NM", "LP", "MP", "HP"]:
+            condition = "NM"
+            
+        notes = data.get("notes", "").strip()
+        
+        # Create card dictionary
+        new_card = {
+            "Page": page,
+            "Slot": slot,
+            "Dex Number": dex_id if dex_id > 0 else "",
+            "Name": name,
+            "Condition": condition,
+            "Notes": notes,
+            "Date Added": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Save to local CSV file
+        if pokemon_binder.add_card_to_csv(new_card):
+            # Check Google Sheets Sync
+            sync_success = True
+            sync_msg = ""
+            config = pokemon_binder.load_config()
+            
+            if config.get("gsheet_enabled"):
+                collection = pokemon_binder.load_collection()
+                sync_success, sync_msg = pokemon_binder.sync_with_google_sheets(config, collection)
+            
+            self.send_json({
+                "success": True,
+                "card": new_card,
+                "gsheet_synced": config.get("gsheet_enabled"),
+                "gsheet_success": sync_success,
+                "gsheet_message": sync_msg
+            })
+        else:
+            self.send_json({"success": False, "error": "Could not write card to local CSV database"}, status=500)
+
+    def handle_remove_card(self, data):
+        # We need to know which card to remove.
+        # Removing by page, slot, and name/dex_number makes it specific.
+        try:
+            page = int(data.get("page"))
+            slot = int(data.get("slot"))
+            name = data.get("name", "").strip().lower()
+        except (ValueError, TypeError):
+            self.send_json({"success": False, "error": "Missing or invalid Page/Slot specifications"}, status=400)
+            return
+            
+        collection = pokemon_binder.load_collection()
+        found_idx = -1
+        
+        # Look for matching card
+        for idx, card in enumerate(collection):
+            if card["Page"] == page and card["Slot"] == slot and card["Name"].lower() == name:
+                found_idx = idx
+                break
+                
+        if found_idx == -1:
+            # Fallback to page and slot only if name matches partially or is empty
+            for idx, card in enumerate(collection):
+                if card["Page"] == page and card["Slot"] == slot:
+                    found_idx = idx
+                    break
+                    
+        if found_idx == -1:
+            self.send_json({"success": False, "error": "Card not found in collection"}, status=404)
+            return
+            
+        removed_card = collection.pop(found_idx)
+        
+        if pokemon_binder.save_collection(collection):
+            sync_success = True
+            sync_msg = ""
+            config = pokemon_binder.load_config()
+            
+            if config.get("gsheet_enabled"):
+                sync_success, sync_msg = pokemon_binder.sync_with_google_sheets(config, collection)
+                
+            self.send_json({
+                "success": True,
+                "removed_card": removed_card,
+                "gsheet_synced": config.get("gsheet_enabled"),
+                "gsheet_success": sync_success,
+                "gsheet_message": sync_msg
+            })
+        else:
+            self.send_json({"success": False, "error": "Failed to update CSV database"}, status=500)
+
+    def handle_sync_gspread(self):
+        config = pokemon_binder.load_config()
+        if not config.get("gsheet_enabled"):
+            self.send_json({"success": False, "error": "Google Sheets integration is disabled in settings."}, status=400)
+            return
+            
+        collection = pokemon_binder.load_collection()
+        success, msg = pokemon_binder.sync_with_google_sheets(config, collection)
+        
+        if success:
+            self.send_json({"success": True, "message": msg})
+        else:
+            self.send_json({"success": False, "error": msg}, status=500)
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    # This enables handling multiple requests in parallel without freezing the connection
+    allow_reuse_address = True
+
+def main():
+    # Make sure cache is loaded once on server startup to speed up response
+    print("[*] Pre-loading PokeAPI local cache...")
+    pokemon_binder.load_pokemon_database()
+    
+    server_address = ('', PORT)
+    httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
+    print(f"\n=======================================================")
+    print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
+    print(f"   Running on http://localhost:{PORT}")
+    print(f"   Press Ctrl+C in this window to stop the server")
+    print(f"=======================================================\n")
+    
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        httpd.server_close()
+        sys.exit(0)
+
+if __name__ == '__main__':
+    main()
