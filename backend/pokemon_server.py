@@ -374,6 +374,13 @@ def main():
     print("[*] Pre-loading PokeAPI local cache...")
     pokemon_binder.load_pokemon_database()
     
+    # Download default icon if missing
+    try:
+        pokemon_binder.download_default_icon()
+    except Exception:
+        pass
+
+    
     server_address = ('', PORT)
     httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
     

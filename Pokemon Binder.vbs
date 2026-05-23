@@ -20,6 +20,22 @@ Else
     ' Wait 3 seconds for the server to load its database cache and bind to port 8000
     WScript.Sleep 3000
     
+    ' Create a desktop shortcut on first run
+    Dim desktopPath, shortcut, iconPath
+    desktopPath = WshShell.SpecialFolders("Desktop")
+    iconPath = scriptDir & "\data\pokeball.ico"
+    
+    If Not fso.FileExists(desktopPath & "\Pokemon Binder.lnk") Then
+        Set shortcut = WshShell.CreateShortcut(desktopPath & "\Pokemon Binder.lnk")
+        shortcut.TargetPath = WScript.ScriptFullName
+        shortcut.WorkingDirectory = scriptDir
+        shortcut.Description = "Launch Pokémon Binder Manager"
+        If fso.FileExists(iconPath) Then
+            shortcut.IconLocation = iconPath
+        End If
+        shortcut.Save
+    End If
+    
     ' Open Microsoft Edge in standalone chromeless App Mode
     ' Spawns a clean dedicated desktop window without tabs or an address bar
     WshShell.Run "msedge --app=http://localhost:8000 --window-size=1320,880", 1, False

@@ -144,6 +144,28 @@ def load_pokemon_database():
             pass
         return fallback
 
+def download_default_icon():
+    icon_path = os.path.join(DATA_DIR, "pokeball.ico")
+    if not os.path.exists(icon_path):
+        print(f"{CLR_INFO}[i] Downloading Poke Ball icon...{CLR_RESET}")
+        try:
+            url = "https://raw.githubusercontent.com/LeBronWilly/Pokemon_Info/main/pokeball.ico"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                with open(icon_path, "wb") as f:
+                    f.write(response.read())
+            print(f"{CLR_SUCCESS}[+] Downloaded Poke Ball icon successfully!{CLR_RESET}")
+        except Exception:
+            try:
+                url_fallback = "https://raw.githubusercontent.com/driss-khelfi/pokemon/master/pokeball.ico"
+                req = urllib.request.Request(url_fallback, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    with open(icon_path, "wb") as f:
+                        f.write(response.read())
+            except Exception:
+                pass
+
+
 def find_pokemon(query, db):
     query = query.strip().lower()
     if not query:
