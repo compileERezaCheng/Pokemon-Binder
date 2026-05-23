@@ -39,6 +39,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.serve_file(os.path.join(FRONTEND_DIR, 'index.js'), 'application/javascript; charset=utf-8')
         elif path == '/cover_image.png':
             self.serve_file(os.path.join(DATA_DIR, 'cover_image.png'), 'image/png')
+        elif path == '/favicon.ico':
+            self.serve_file(os.path.join(DATA_DIR, 'pokeball.ico'), 'image/x-icon')
             
         # API Endpoints
         elif path == '/api/collection':
