@@ -11,8 +11,26 @@ from datetime import datetime
 if sys.platform == 'win32':
     os.system('color')
 
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(base_path, relative_path)
+
 # Configuration constants
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+# For data persistence, we want data/ to be in the same folder as the EXE, 
+# not inside the temp folder created by PyInstaller.
+if getattr(sys, 'frozen', False):
+    # Running as a bundled EXE
+    EXE_DIR = os.path.dirname(sys.executable)
+    DATA_DIR = os.path.join(EXE_DIR, "data")
+else:
+    # Running in development
+    DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+
 CONFIG_FILE = os.path.join(DATA_DIR, "binder_config.json")
 DATA_FILE = os.path.join(DATA_DIR, "pokemon_binder.csv")
 CACHE_FILE = os.path.join(DATA_DIR, "pokemon_cache.json")
@@ -27,11 +45,11 @@ if not os.path.exists(DATA_DIR):
 # Copy default templates if they do not exist
 try:
     if not os.path.exists(CONFIG_FILE):
-        default_config_path = CONFIG_FILE + ".default"
+        default_config_path = get_resource_path(os.path.join("data", "binder_config.json.default"))
         if os.path.exists(default_config_path):
             shutil.copy(default_config_path, CONFIG_FILE)
     if not os.path.exists(DATA_FILE):
-        default_data_path = DATA_FILE + ".default"
+        default_data_path = get_resource_path(os.path.join("data", "pokemon_binder.csv.default"))
         if os.path.exists(default_data_path):
             shutil.copy(default_data_path, DATA_FILE)
 except Exception:

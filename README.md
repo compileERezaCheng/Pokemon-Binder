@@ -36,12 +36,13 @@ Simply double-click **`Pokemon Binder.exe`** in the project folder.
 
 ## 🛠️ Development
 
-If you want to modify the launcher executable:
-- The C# source code is located in the `src/` folder.
-- You can recompile it using the Windows C# compiler:
-  ```bash
-  C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:"Pokemon Binder.exe" /r:System.Windows.Forms.dll,System.dll src\launcher.cs
-  ```
+If you want to modify the application logic or re-bundle the standalone executable:
+1. Install dependencies: `pip install pyinstaller gspread google-auth`
+2. Run the PyInstaller command from the project root:
+   ```bash
+   python -m PyInstaller --onefile --noconsole --name "Pokemon Binder" --icon data/pokeball.ico --add-data "frontend;frontend" --add-data "data;data" --distpath . backend\pokemon_server.py
+   ```
+- The C# source code for the legacy launcher is still available in the `src/` folder if needed.
 
 ---
 

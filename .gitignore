@@ -8,6 +8,11 @@ backend/__pycache__/
 *.pyo
 *.pyd
 
+# PyInstaller
+build/
+dist/
+*.spec
+
 # User Data & Local Cache
 data/pokemon_binder.csv
 data/binder_config.json

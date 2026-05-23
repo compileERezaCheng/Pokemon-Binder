@@ -13,8 +13,20 @@ LAST_HEARTBEAT = time.time()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pokemon_binder
 
-FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+# Logic to handle internal assets vs external data persistence
+if getattr(sys, 'frozen', False):
+    # Running as a bundled EXE
+    INTERNAL_DIR = sys._MEIPASS
+    FRONTEND_DIR = os.path.join(INTERNAL_DIR, "frontend")
+    # DATA_DIR is handled by pokemon_binder.py for persistence
+    # but we might need internal assets like the favicon from the bundled data
+    INTERNAL_DATA_DIR = os.path.join(INTERNAL_DIR, "data")
+else:
+    # Running in development
+    FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+    INTERNAL_DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+
+DATA_DIR = pokemon_binder.DATA_DIR
 PORT = 8000
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -37,8 +49,11 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path == '/cover_image.png':
             self.serve_file(os.path.join(DATA_DIR, 'cover_image.png'), 'image/png', cache_age=0)
         elif path == '/favicon.ico':
-            # Favicon is completely static, cache for 1 day
-            self.serve_file(os.path.join(DATA_DIR, 'pokeball.ico'), 'image/x-icon', cache_age=86400)
+            # Try to serve from external data first, fallback to internal
+            ico_path = os.path.join(DATA_DIR, 'pokeball.ico')
+            if not os.path.exists(ico_path):
+                ico_path = os.path.join(INTERNAL_DATA_DIR, 'pokeball.ico')
+            self.serve_file(ico_path, 'image/x-icon', cache_age=86400)
             
         # API Endpoints
         elif path == '/api/collection':
@@ -383,6 +398,56 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     # This enables handling multiple requests in parallel without freezing the connection
     allow_reuse_address = True
 
+def launch_browser():
+    import subprocess
+    import time
+    # Give the server a moment to start
+    time.sleep(2)
+    try:
+        # Try Edge App Mode
+        subprocess.Popen(['msedge.exe', '--app=http://localhost:8000', '--window-size=1320,880'], 
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        try:
+            # Fallback to default browser
+            import webbrowser
+            webbrowser.open('http://localhost:8000')
+        except Exception:
+            pass
+
+def check_setup_shortcut():
+    if not getattr(sys, 'frozen', False):
+        return
+        
+    import ctypes
+    import subprocess
+    desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
+    shortcut_path = os.path.join(desktop, 'Pokemon Binder.lnk')
+    
+    if not os.path.exists(shortcut_path):
+        MB_YESNO = 0x04
+        MB_ICONQUESTION = 0x20
+        IDYES = 6
+        
+        res = ctypes.windll.user32.MessageBoxW(0, 
+            "Do you want to create a Desktop shortcut for Pokémon Binder Manager?", 
+            "Pokémon Binder Setup", 
+            MB_YESNO | MB_ICONQUESTION)
+            
+        if res == IDYES:
+            try:
+                target = sys.executable
+                work_dir = os.path.dirname(sys.executable)
+                ico = os.path.join(DATA_DIR, "pokeball.ico")
+                # Using powershell to create shortcut to avoid extra dependencies like pywin32
+                ps_cmd = f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");$s.TargetPath="{target}";$s.WorkingDirectory="{work_dir}";'
+                if os.path.exists(ico):
+                    ps_cmd += f'$s.IconLocation="{ico}";'
+                ps_cmd += '$s.Save()'
+                subprocess.run(['powershell', '-Command', ps_cmd], capture_output=True)
+            except Exception:
+                pass
+
 def main():
     # Make sure cache is loaded once on server startup to speed up response
     print("[*] Pre-loading PokeAPI local cache...")
@@ -394,12 +459,19 @@ def main():
     except Exception:
         pass
 
+    # Shortcut setup for first-time EXE run
+    check_setup_shortcut()
+    
+    # Launch browser in a background thread
+    import threading
+    browser_thread = threading.Thread(target=launch_browser)
+    browser_thread.daemon = True
+    browser_thread.start()
     
     server_address = ('', PORT)
     httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
     
     # Start the heartbeat monitoring thread
-    import threading
     monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
     monitor_thread.daemon = True
     monitor_thread.start()
