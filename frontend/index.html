@@ -382,7 +382,13 @@
                                     <li>Enable the <strong>Google Sheets API</strong> and <strong>Google Drive API</strong> inside your project.</li>
                                     <li>Go to <strong>Credentials</strong> &rarr; Click <strong>+ CREATE CREDENTIALS</strong> &rarr; Select <strong>Service Account</strong>.</li>
                                     <li>Navigate to the created Service Account's <strong>Keys</strong> tab, click <strong>Add Key</strong> &rarr; <strong>Create new key</strong> &rarr; select <strong>JSON</strong>.</li>
-                                    <li>Download the JSON credentials file, rename it exactly to <code>credentials.json</code>, and place it in the same directory as your Python files.</li>
+                                    <li>Download the JSON credentials file and rename it exactly to <code>credentials.json</code>.</li>
+                                    <li><strong>Where to place it:</strong>
+                                        <ul>
+                                            <li><strong>If installed:</strong> Press <code>Win + R</code>, type <code>%APPDATA%\PokemonBinder\data</code>, and paste the file there.</li>
+                                            <li><strong>If running from source:</strong> Place it inside the <code>backend/</code> folder.</li>
+                                        </ul>
+                                    </li>
                                     <li>Create a Google Spreadsheet (e.g. named "Pokemon Binder") in your Google Drive.</li>
                                     <li>Click <strong>Share</strong> in your Google Sheet and add the Service Account's email address (found inside your JSON key under <code>client_email</code>) with <strong>Editor</strong> permission.</li>
                                     <li>Ensure the Spreadsheet Name matches your Google Sheets Sync setting exactly!</li>

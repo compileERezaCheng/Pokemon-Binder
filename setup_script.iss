@@ -23,8 +23,8 @@ Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 
 [Files]
-; The main application files from the dist/Pokemon Binder folder
-Source: "dist\Pokemon Binder\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The main application file from the dist folder
+Source: "dist\Pokemon Binder.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Pokemon Binder Manager"; Filename: "{app}\Pokemon Binder.exe"

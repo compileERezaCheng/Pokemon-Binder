@@ -48,13 +48,23 @@ If you want to modify the application logic or re-bundle the standalone executab
 
 ## ☁️ Google Sheets Sync Setup Guide
 
-To automatically sync your binder rows to a Google Spreadsheet:
+To automatically sync your binder rows to a Google Spreadsheet, follow these steps:
 
-1. Open the [Google Cloud Console](https://console.cloud.google.com/) and create a project.
-2. Enable both the **Google Sheets API** and **Google Drive API**.
-3. Head to **Credentials** &rarr; click **+ CREATE CREDENTIALS** &rarr; select **Service Account**.
-4. Inside the created account's **Keys** tab, click **Add Key** &rarr; **Create new key** &rarr; select **JSON**.
-5. Save the downloaded credentials file inside the project folder and rename it exactly to **`credentials.json`**.
-6. Create a blank Google Spreadsheet in Google Drive (e.g. named "Pokemon Binder").
-7. Click **Share** in the Google Sheet and add the Service Account's email address (found inside `credentials.json` under `client_email`) with **Editor** permissions.
-8. Activate "Google Sheets Sync" inside the settings panel of the web app or CLI.
+1.  **Create a Google Cloud Project**:
+    - Open the [Google Cloud Console](https://console.cloud.google.com/).
+    - Create a new project (e.g., "Pokemon Binder").
+2.  **Enable APIs**:
+    - Search for and enable both the **Google Sheets API** and the **Google Drive API**.
+3.  **Generate Credentials**:
+    - Go to **Credentials** &rarr; click **+ CREATE CREDENTIALS** &rarr; select **Service Account**.
+    - Once created, go to the account's **Keys** tab &rarr; click **Add Key** &rarr; **Create new key** &rarr; select **JSON**.
+4.  **Install Credentials**:
+    - Rename the downloaded JSON file to exactly **`credentials.json`**.
+    - **Where to place it**:
+        - **Installed Version**: Press `Win + R`, type `%APPDATA%\PokemonBinder\data`, and paste the file there.
+        - **Running from Source**: Place it inside the `backend/` folder.
+5.  **Configure your Spreadsheet**:
+    - Create a blank Google Spreadsheet in Google Drive (e.g., named "Pokemon Binder").
+    - Click **Share** and add the Service Account's email address (found inside your `credentials.json` under `client_email`) with **Editor** permissions.
+6.  **Activate Sync**:
+    - Open the Pokémon Binder settings, enable **Google Sheets Synchronization**, and enter the **Spreadsheet Name** exactly as it appears in Google Drive.

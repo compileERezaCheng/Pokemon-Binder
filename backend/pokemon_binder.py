@@ -289,6 +289,22 @@ def add_card_to_csv(card):
 
 # ==================== GOOGLE SHEETS SYNC MODULE ====================
 
+def get_credentials_path():
+    """ Try multiple locations for credentials.json and return the first one that exists """
+    possible_paths = [
+        # 1. Next to the script (dev) or in _internal (frozen)
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.json")),
+        # 2. In the persistent DATA_DIR (best for installed apps)
+        os.path.join(DATA_DIR, "credentials.json"),
+        # 3. Next to the executable (convenient for users)
+        os.path.join(os.path.dirname(sys.executable), "credentials.json")
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
 def get_gspread_client():
     try:
         import gspread
@@ -296,9 +312,9 @@ def get_gspread_client():
     except ImportError:
         return None, "Google Sheets libraries (gspread, google-auth) are not installed.\n       Please run via 'run_binder.bat' to install dependencies."
         
-    credentials_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.json"))
-    if not os.path.exists(credentials_path):
-        return None, "credentials.json key file is missing in the backend folder. Run Settings -> option 3 for help."
+    credentials_path = get_credentials_path()
+    if not credentials_path:
+        return None, f"credentials.json key file is missing.\n       Please place it in: {DATA_DIR}\n       Run Settings -> option 3 for help."
         
     try:
         scopes = [
@@ -358,9 +374,10 @@ def sync_with_google_sheets(config, collection):
         # Give helpful tip on SpreadsheetNotFound
         if "SpreadsheetNotFound" in str(type(e)):
             email = "your-service-account-email"
-            if os.path.exists("credentials.json"):
+            cp = get_credentials_path()
+            if cp:
                 try:
-                    with open("credentials.json") as f:
+                    with open(cp) as f:
                         email = json.load(f).get("client_email", email)
                 except Exception:
                     pass
@@ -369,10 +386,10 @@ def sync_with_google_sheets(config, collection):
 
 def print_google_sheets_setup_guide():
     email = "your-service-account-email@...gserviceaccount.com"
-    credentials_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.json"))
-    if os.path.exists(credentials_path):
+    cp = get_credentials_path()
+    if cp:
         try:
-            with open(credentials_path) as f:
+            with open(cp) as f:
                 email = json.load(f).get("client_email", email)
         except Exception:
             pass
@@ -382,14 +399,14 @@ def print_google_sheets_setup_guide():
     print("1. Go to the Google Cloud Console (https://console.cloud.google.com/).")
     print("2. Create a new project and enable 'Google Sheets API' & 'Google Drive API'.")
     print("3. Go to 'Credentials' -> Click '+ CREATE CREDENTIALS' -> select 'Service Account'.")
-    print("4. Complete the creation. Under the 'Keys' tab of that account, click 'Add Key' -> 'Create new key' -> JSON.")
-    print("5. Save the downloaded JSON file in this directory and rename it exactly to:")
-    print("   \033[92mcredentials.json\033[0m")
-    print("6. Open Google Sheets in your browser, create a spreadsheet (e.g. named 'Pokemon Binder').")
-    print("7. Share that Google Sheet (click 'Share' in Google Sheets) with your Service Account email:")
+    print("4. Under the 'Keys' tab of that account, click 'Add Key' -> 'Create new key' -> JSON.")
+    print("5. Rename the downloaded JSON file to: \033[92mcredentials.json\033[0m")
+    print("6. Where to place it:")
+    print(f"   - Installed: Paste into: \033[96m{DATA_DIR}\033[0m")
+    print("   - Source: Place inside the 'backend' folder.")
+    print("7. Create a Google Sheet and share it with your Service Account email:")
     print(f"   {CLR_WARNING}{email}{CLR_RESET}")
-    print("   (Give it 'Editor' access.)")
-    print("8. Make sure to Enable Sheets Integration and set the Spreadsheet Name in Settings!")
+    print("8. Enable Sheets Sync and set the Spreadsheet Name in Settings!")
 
 # ==================== CORE CALCULATIONS ====================
 

@@ -22,6 +22,7 @@ data/cover_image.png
 # Windows junk
 Thumbs.db
 Desktop.ini
+*.exe
 
 # Editor settings
 .vscode/
