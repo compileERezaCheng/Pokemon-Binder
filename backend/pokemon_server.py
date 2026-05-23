@@ -21,13 +21,20 @@ if getattr(sys, 'frozen', False):
     # DATA_DIR is handled by pokemon_binder.py for persistence
     # but we might need internal assets like the favicon from the bundled data
     INTERNAL_DATA_DIR = os.path.join(INTERNAL_DIR, "data")
+    
+    # Path for logs in APPDATA
+    LOG_DIR = os.path.join(os.environ.get('APPDATA'), "PokemonBinder")
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR, exist_ok=True)
+    STARTUP_LOG = os.path.join(LOG_DIR, "startup_error.log")
 else:
     # Running in development
     FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
     INTERNAL_DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+    STARTUP_LOG = "startup_error.log"
 
 DATA_DIR = pokemon_binder.DATA_DIR
-PORT = 8000
+PORT = 8080
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def end_headers(self):

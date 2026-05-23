@@ -21,12 +21,12 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # Configuration constants
-# For data persistence, we want data/ to be in the same folder as the EXE, 
-# not inside the temp folder created by PyInstaller.
+# For data persistence, we want data/ to be in %APPDATA% so it's writable 
+# even when the app is installed in Program Files.
 if getattr(sys, 'frozen', False):
     # Running as a bundled EXE
-    EXE_DIR = os.path.dirname(sys.executable)
-    DATA_DIR = os.path.join(EXE_DIR, "data")
+    APPDATA = os.environ.get('APPDATA')
+    DATA_DIR = os.path.join(APPDATA, "PokemonBinder", "data")
 else:
     # Running in development
     DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
