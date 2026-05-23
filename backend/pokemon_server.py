@@ -401,19 +401,59 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 def launch_browser():
     import subprocess
     import time
-    # Give the server a moment to start
-    time.sleep(2)
-    try:
-        # Try Edge App Mode
-        subprocess.Popen(['msedge.exe', '--app=http://localhost:8000', '--window-size=1320,880'], 
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
+    import http.client
+    import shutil
+
+    # 1. Wait for server to be ready to avoid "Connection Refused" errors
+    max_retries = 20
+    ready = False
+    for _ in range(max_retries):
         try:
-            # Fallback to default browser
-            import webbrowser
-            webbrowser.open('http://localhost:8000')
+            conn = http.client.HTTPConnection("localhost", PORT)
+            conn.request("GET", "/")
+            res = conn.getresponse()
+            if res.status == 200:
+                ready = True
+                break
         except Exception:
             pass
+        time.sleep(0.5)
+
+    if not ready:
+        return
+
+    # 2. Find Microsoft Edge for "App Mode" to make it look like a standalone app
+    edge_cmd = "msedge.exe"
+    edge_path = shutil.which(edge_cmd)
+    
+    if not edge_path:
+        # Check standard Windows installation paths if not in system PATH
+        possible_paths = [
+            os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'Microsoft\\Edge\\Application\\msedge.exe'),
+            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'Microsoft\\Edge\\Application\\msedge.exe'),
+            os.path.expanduser('~\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe')
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                edge_path = path
+                break
+
+    # 3. Launch in App Mode if Edge is found
+    if edge_path:
+        try:
+            # --app flag removes address bar/tabs for the native app feel
+            subprocess.Popen([edge_path, f'--app=http://localhost:{PORT}', '--window-size=1320,880'], 
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except Exception:
+            pass
+
+    # Final Fallback: Open in the user's default browser if Edge App Mode fails
+    try:
+        import webbrowser
+        webbrowser.open(f'http://localhost:{PORT}')
+    except Exception:
+        pass
 
 def check_setup_shortcut():
     if not getattr(sys, 'frozen', False):
