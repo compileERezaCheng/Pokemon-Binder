@@ -58,10 +58,3 @@ To automatically sync your binder rows to a Google Spreadsheet:
 6. Create a blank Google Spreadsheet in Google Drive (e.g. named "Pokemon Binder").
 7. Click **Share** in the Google Sheet and add the Service Account's email address (found inside `credentials.json` under `client_email`) with **Editor** permissions.
 8. Activate "Google Sheets Sync" inside the settings panel of the web app or CLI.
-
----
-
-## 🔒 Security Reminder
-
-> [!WARNING]
-> Your `credentials.json` file contains private access keys to your Google APIs. A `.gitignore` file has been pre-configured to prevent this file from being pushed to public GitHub. **Do not commit your credentials keys!**
