@@ -40,7 +40,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed_url.query)
 
         # Static files mapping
-        if path == '/' or path == '/index.html':
+        if path == '/' or path == '/loading.html':
+            self.serve_file(os.path.join(FRONTEND_DIR, 'loading.html'), 'text/html; charset=utf-8', cache_age=0)
+        elif path == '/index.html':
             self.serve_file(os.path.join(FRONTEND_DIR, 'index.html'), 'text/html; charset=utf-8', cache_age=0)
         elif path == '/index.css':
             self.serve_file(os.path.join(FRONTEND_DIR, 'index.css'), 'text/css; charset=utf-8', cache_age=0)
