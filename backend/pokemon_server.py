@@ -5,6 +5,9 @@ import os
 import sys
 import urllib.parse
 from datetime import datetime
+import time
+
+LAST_HEARTBEAT = time.time()
 
 # Add the current directory to sys.path so we can import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +83,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.handle_upload_cover_image(data)
         elif path == '/api/shutdown':
             self.handle_shutdown()
+        elif path == '/api/heartbeat':
+            self.handle_heartbeat()
         else:
             self.send_error(404, "API Endpoint Not Found")
 
@@ -343,6 +348,23 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_json({"success": True, "message": "Server is shutting down..."})
         threading.Thread(target=shutdown_process, args=(self.server,)).start()
 
+    def handle_heartbeat(self):
+        global LAST_HEARTBEAT
+        LAST_HEARTBEAT = time.time()
+        self.send_json({"success": True})
+
+def monitor_heartbeat(server):
+    # 15-second grace period at startup to allow Edge/Chrome app to launch and load JavaScript
+    time.sleep(15)
+    while True:
+        time.sleep(2)
+        if time.time() - LAST_HEARTBEAT > 12:
+            # No heartbeat received for 12 seconds, assume app was closed
+            print("[*] No active app connection detected. Automatically shutting down server...")
+            server.shutdown()
+            server.server_close()
+            os._exit(0)
+
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     # This enables handling multiple requests in parallel without freezing the connection
     allow_reuse_address = True
@@ -354,6 +376,13 @@ def main():
     
     server_address = ('', PORT)
     httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
+    
+    # Start the heartbeat monitoring thread
+    import threading
+    monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
+    monitor_thread.daemon = True
+    monitor_thread.start()
+    
     print(f"\n=======================================================")
     print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
     print(f"   Running on http://localhost:{PORT}")

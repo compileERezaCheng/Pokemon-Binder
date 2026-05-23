@@ -1293,3 +1293,8 @@ async function shutdownServer() {
     }
 }
 
+// Start heartbeat loop (every 3 seconds) to let backend know the app is active
+setInterval(() => {
+    fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
+}, 3000);
+
