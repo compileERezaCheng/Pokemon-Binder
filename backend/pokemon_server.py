@@ -489,48 +489,53 @@ def check_setup_shortcut():
                 pass
 
 def main():
-    # Make sure cache is loaded once on server startup to speed up response
-    print("[*] Pre-loading PokeAPI local cache...")
-    pokemon_binder.load_pokemon_database()
-    
-    # Download default icon if missing
     try:
-        pokemon_binder.download_default_icon()
-    except Exception:
-        pass
+        # Make sure cache is loaded once on server startup to speed up response
+        print("[*] Pre-loading PokeAPI local cache...")
+        pokemon_binder.load_pokemon_database()
+        
+        # Download default icon if missing
+        try:
+            pokemon_binder.download_default_icon()
+        except Exception:
+            pass
 
-    # Shortcut setup and browser launch in background threads so they don't block the server
-    import threading
-    
-    # 1. Shortcut setup (MessageBox blocks, so it MUST be in a thread)
-    shortcut_thread = threading.Thread(target=check_setup_shortcut)
-    shortcut_thread.daemon = True
-    shortcut_thread.start()
-    
-    # 2. Browser launch
-    browser_thread = threading.Thread(target=launch_browser)
-    browser_thread.daemon = True
-    browser_thread.start()
-    
-    server_address = ('', PORT)
-    httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
-    
-    # 3. Heartbeat monitor
-    monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
-    monitor_thread.daemon = True
-    monitor_thread.start()
-    
-    print(f"\n=======================================================")
-    print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
-    print(f"   Running on http://localhost:{PORT}")
-    print(f"   Press Ctrl+C in this window to stop the server")
-    print(f"=======================================================\n")
-    
-    try:
+        # Shortcut setup and browser launch in background threads so they don't block the server
+        import threading
+        
+        # 1. Shortcut setup (MessageBox blocks, so it MUST be in a thread)
+        shortcut_thread = threading.Thread(target=check_setup_shortcut)
+        shortcut_thread.daemon = True
+        shortcut_thread.start()
+        
+        # 2. Browser launch
+        browser_thread = threading.Thread(target=launch_browser)
+        browser_thread.daemon = True
+        browser_thread.start()
+        
+        server_address = ('', PORT)
+        httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
+        
+        # 3. Heartbeat monitor
+        monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
+        monitor_thread.daemon = True
+        monitor_thread.start()
+        
+        print(f"\n=======================================================")
+        print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
+        print(f"   Running on http://localhost:{PORT}")
+        print(f"   Press Ctrl+C in this window to stop the server")
+        print(f"=======================================================\n")
+        
         httpd.serve_forever()
+    except Exception as e:
+        import traceback
+        with open("startup_error.log", "w") as f:
+            f.write(str(e) + "\n")
+            f.write(traceback.format_exc())
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\nShutting down server...")
-        httpd.server_close()
         sys.exit(0)
 
 if __name__ == '__main__':
