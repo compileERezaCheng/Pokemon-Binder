@@ -459,11 +459,15 @@ def main():
     except Exception:
         pass
 
-    # Shortcut setup for first-time EXE run
-    check_setup_shortcut()
-    
-    # Launch browser in a background thread
+    # Shortcut setup and browser launch in background threads so they don't block the server
     import threading
+    
+    # 1. Shortcut setup (MessageBox blocks, so it MUST be in a thread)
+    shortcut_thread = threading.Thread(target=check_setup_shortcut)
+    shortcut_thread.daemon = True
+    shortcut_thread.start()
+    
+    # 2. Browser launch
     browser_thread = threading.Thread(target=launch_browser)
     browser_thread.daemon = True
     browser_thread.start()
@@ -471,7 +475,7 @@ def main():
     server_address = ('', PORT)
     httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
     
-    # Start the heartbeat monitoring thread
+    # 3. Heartbeat monitor
     monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
     monitor_thread.daemon = True
     monitor_thread.start()
