@@ -139,7 +139,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         try:
             response_content = json.dumps(data).encode('utf-8')
             self.send_response(status)
-            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(response_content)))
             if cache_age > 0:
                 self.send_header('Cache-Control', f'public, max-age={cache_age}')
@@ -196,7 +196,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         
         # Merge incoming settings
         for key in ["rows", "cols", "mode", "gsheet_enabled", "gsheet_name", 
-                    "cover_title", "cover_subtitle", "cover_owner", "cover_color", "cover_featured_dex"]:
+                    "cover_title", "cover_subtitle", "cover_owner", "cover_color", "cover_featured_dex",
+                    "cover_source", "cover_image_url"]:
             if key in data:
                 if key == "rows" or key == "cols":
                     try:

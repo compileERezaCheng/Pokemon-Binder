@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     "cover_owner": "Ash",
     "cover_color": "#e02424",
     "cover_featured_dex": 25,
-    "cover_source": "dex"
+    "cover_source": "pokemon"
 }
 
 # Color constants
