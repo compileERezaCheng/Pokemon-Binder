@@ -463,7 +463,15 @@ def check_setup_shortcut():
         
     import ctypes
     import subprocess
-    desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
+    from ctypes import wintypes
+    
+    # Robustly find the Desktop path (works for OneDrive and localized names like "Ambiente de Trabalho")
+    CSIDL_DESKTOP = 0x0000
+    SHGFP_TYPE_CURRENT = 0
+    buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+    ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_DESKTOP, 0, SHGFP_TYPE_CURRENT, buf)
+    desktop = buf.value
+    
     shortcut_path = os.path.join(desktop, 'Pokemon Binder.lnk')
     
     if not os.path.exists(shortcut_path):
@@ -480,12 +488,11 @@ def check_setup_shortcut():
             try:
                 target = sys.executable
                 work_dir = os.path.dirname(sys.executable)
-                ico = os.path.join(DATA_DIR, "pokeball.ico")
-                # Using powershell to create shortcut to avoid extra dependencies like pywin32
-                ps_cmd = f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");$s.TargetPath="{target}";$s.WorkingDirectory="{work_dir}";'
-                if os.path.exists(ico):
-                    ps_cmd += f'$s.IconLocation="{ico}";'
-                ps_cmd += '$s.Save()'
+                # Use the icon embedded in the EXE itself
+                ico = target
+                
+                # Using powershell to create shortcut safely
+                ps_cmd = f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");$s.TargetPath="{target}";$s.WorkingDirectory="{work_dir}";$s.IconLocation="{ico}";$s.Save()'
                 subprocess.run(['powershell', '-Command', ps_cmd], capture_output=True)
             except Exception:
                 pass
