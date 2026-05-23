@@ -29,11 +29,17 @@ This is a local-first, highly visual, glassmorphic double-page digital card albu
 ## 🚀 Getting Started
 
 ### 1. Launching the Web Interface (Recommended)
-Simply double-click **`run_server.bat`** in the project folder. This will:
-1. Fire up the local lightweight HTTP server on port `8000`.
-2. Automatically launch your default web browser pointing directly to `http://localhost:8000`.
 
-*Press `Ctrl + C` inside the server console window to shut down.*
+There are two ways to start the web interface:
+
+#### Option A: Run Silently in the Background (No Terminal Window) ✨
+1. Double-click **`run_server.vbs`** in the project folder. This will launch the server completely in the background and open your web browser.
+2. To stop the background server at any time, double-click **`stop_server.bat`** in the project folder.
+
+#### Option B: Run with a Visible Terminal Window
+1. Double-click **`run_server.bat`** in the project folder.
+2. This starts the server inside a command prompt window and opens your browser.
+3. To stop the server, press `Ctrl + C` inside the terminal window or close the window.
 
 ### 2. Launching the CLI Terminal Version
 If you prefer running a command-line script interface, double-click **`run_binder.bat`** to start `pokemon_binder.py`.
