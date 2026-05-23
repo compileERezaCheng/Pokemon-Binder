@@ -76,6 +76,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.handle_sync_gspread()
         elif path == '/api/upload-cover-image':
             self.handle_upload_cover_image(data)
+        elif path == '/api/shutdown':
+            self.handle_shutdown()
         else:
             self.send_error(404, "API Endpoint Not Found")
 
@@ -325,6 +327,19 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": True, "message": msg})
         else:
             self.send_json({"success": False, "error": msg}, status=500)
+
+    def handle_shutdown(self):
+        import threading
+        import time
+        
+        def shutdown_process(server):
+            time.sleep(0.5)  # Wait 500ms to allow response to send fully
+            server.shutdown()
+            server.server_close()
+            os._exit(0)
+            
+        self.send_json({"success": True, "message": "Server is shutting down..."})
+        threading.Thread(target=shutdown_process, args=(self.server,)).start()
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     # This enables handling multiple requests in parallel without freezing the connection

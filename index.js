@@ -1255,3 +1255,41 @@ function escapeHtml(unsafe) {
          .replace(/"/g, "&quot;")
          .replace(/'/g, "&#039;");
 }
+
+async function shutdownServer() {
+    if (!confirm("Are you sure you want to stop the background web server? This will shut down the app.")) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/shutdown', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            document.body.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Outfit', sans-serif; color: #fff; background: #0f0f12; text-align: center; padding: 20px;">
+                    <div style="font-size: 64px; margin-bottom: 20px; animation: pulse 2s infinite;">🔌</div>
+                    <h1 style="font-size: 28px; margin-bottom: 10px;">Server Disconnected</h1>
+                    <p style="color: #a0a0ab; font-size: 16px; max-width: 400px; line-height: 1.6;">The PokeBinder backend server has been stopped. You can safely close this browser window now.</p>
+                </div>
+            `;
+        } else {
+            alert("Error stopping server: " + data.error);
+        }
+    } catch (e) {
+        // Connection closing abruptly is normal during shutdown
+        document.body.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Outfit', sans-serif; color: #fff; background: #0f0f12; text-align: center; padding: 20px;">
+                <div style="font-size: 64px; margin-bottom: 20px;">🔌</div>
+                <h1 style="font-size: 28px; margin-bottom: 10px;">Server Disconnected</h1>
+                <p style="color: #a0a0ab; font-size: 16px; max-width: 400px; line-height: 1.6;">The PokeBinder backend server has been stopped. You can safely close this browser window now.</p>
+            </div>
+        `;
+    }
+}
+
