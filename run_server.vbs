@@ -17,8 +17,8 @@ If Err.Number <> 0 Then
            "Please ensure Python is installed and added to your system PATH.", _
            16, "Pokémon Binder Server"
 Else
-    ' Wait half a second for the server to bind to the port
-    WScript.Sleep 500
+    ' Wait 2 seconds for the server to bind to the port
+    WScript.Sleep 2000
     ' Open the browser to localhost:8000 directly (no cmd window)
     WshShell.Run "http://localhost:8000"
 End If
