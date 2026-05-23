@@ -28,23 +28,22 @@ This is a local-first, highly visual, glassmorphic double-page digital card albu
 
 ## 🚀 Getting Started
 
-### 1. Launching the Web Interface (Recommended)
+### 1. Standalone Desktop App (Recommended) 🖥️
+Simply double-click **`run_app.bat`** in the project folder.
+- **First-time launch**: It will automatically download the required lightweight `pywebview` module.
+- **How it works**: Spawns the server silently in the background and opens the app in a clean, dedicated window (no browser frame, tabs, or address bar).
+- **Stopping the app**: Simply close the window. The background server is automatically terminated.
 
-There are two ways to start the web interface:
+### 2. Browser Web Interface Alternative
+If you prefer running the app inside your default web browser:
 
-#### Option A: Run Silently in the Background (No Terminal Window) ✨
-1. Double-click **`run_server.vbs`** in the project folder. This will launch the server completely in the background and open your web browser.
-2. To stop the background server at any time, you can:
-   - **From the Web App**: Click the **"Stop Server"** button at the bottom of the sidebar footer.
-   - **From local files**: Double-click **`stop_server.bat`** in the project folder.
+#### Option A: Run Silently in the Background
+1. Double-click **`run_server.vbs`** in the project folder. This launches the server silently in the background and opens your browser.
+2. To stop the server, click the **"Stop Server"** button at the bottom of the sidebar, or double-click **`stop_server.bat`**.
 
 #### Option B: Run with a Visible Terminal Window
 1. Double-click **`run_server.bat`** in the project folder.
-2. This starts the server inside a command prompt window and opens your browser.
-3. To stop the server, press `Ctrl + C` inside the terminal window or close the window.
-
-### 2. Launching the CLI Terminal Version
-If you prefer running a command-line script interface, double-click **`run_binder.bat`** to start `pokemon_binder.py`.
+2. To stop the server, press `Ctrl + C` inside the terminal window or close the window.
 
 ---
 
