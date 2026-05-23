@@ -28,7 +28,9 @@ This is a local-first, highly visual, glassmorphic double-page digital card albu
 
 ## 🚀 Getting Started
 
-Simply double-click **`Pokemon Binder.exe`** in the project folder.
+1.  **Download the latest installer**: Head over to the [**Releases**](https://github.com/compileERezaCheng/Pokemon-Binder/releases) page and download `Pokemon_Binder_Setup.exe`.
+2.  **Install**: Run the setup and follow the instructions.
+3.  **Launch**: Double-click the **Pokémon Binder Manager** shortcut on your desktop.
 - **How it works**: Spawns the backend server windowlessly in the background and opens the app in a clean, dedicated window using Microsoft Edge's App Mode. On first launch, it will ask if you want to create a Desktop shortcut.
 - **Stopping the app**: Simply close the window. The background server automatically detects that the window has been closed (via a client heartbeat) and shuts itself down after 12 seconds to free up port `8000`. You can also click the "Stop Server" button inside the sidebar to shut it down instantly.
 
