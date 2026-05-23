@@ -1,13 +1,15 @@
 # 📖 Pokémon Card Binder Manager ✨
 
-A local-first, highly visual, glassmorphic double-page digital card album manager. Mirroring a physical 3-ring binder, it features double-page spreads, customizable full-bleed covers, autocomplete search index matching, collection sheet grids, and optional automated Google Sheets synchronization!
+A virtual Pokémon card binder to manage and showcase your collection! 
+
+This is a local-first, highly visual, glassmorphic double-page digital card album manager. Mirroring a physical 3-ring binder, it features realistic double-page spreads, customizable full-bleed covers (supporting local file uploads, online URLs, and Dex sprites), autocomplete search index matching, collection sheet grids, a tabular list viewer, and optional automated Google Sheets synchronization.
 
 ---
 
 ## 🌟 Key Features
 
-*   **📖 Realistic Double-Page Binder**: Arranges cards in facing pages (Even numbers on the left, Odd numbers on the right) with a matching grid geometry and an immersive metallic ring binder spine.
-*   **🎨 Personalized Full-Bleed Cover**: Customize the album cover with text, choose from various theme colors, and **upload a local photo** (or use any online URL / featured Pokémon sprite) that stretches to fill the front cover with a hover-zoom effect.
+*   **📖 Realistic Double-Page Binder**: Arranges cards in facing pages (Even numbers on the left, Odd numbers on the right) with a matching grid geometry and an immersive central metallic ring binder spine.
+*   **🎨 Personalized Full-Bleed Cover**: Customize the album cover with text, choose from various theme accent colors, and **upload a local photo** (or use any online URL / featured Pokémon sprite) that stretches to fill the front cover with a hover-zoom effect.
 *   **✨ Interactive Holographic Pockets**: Displays high-resolution official card artwork from PokeAPI with hover animations, condition color badges, custom notes, and stack count badges for duplicate cards in the same pocket slot.
 *   **🔍 Live Autocomplete Search**: Start typing a Pokémon's name or National Dex ID and select from real-time dropdown matching suggestions containing thumbnail sprites.
 *   **📍 Placement Suggestions**: Automatically computes recommended page and slot locations depending on sorting modes (National Dex Order vs. Sequential Fill) and displays warnings if a pocket is already occupied.
