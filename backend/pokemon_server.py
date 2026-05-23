@@ -18,8 +18,6 @@ if getattr(sys, 'frozen', False):
     # Running as a bundled EXE
     INTERNAL_DIR = sys._MEIPASS
     FRONTEND_DIR = os.path.join(INTERNAL_DIR, "frontend")
-    # DATA_DIR is handled by pokemon_binder.py for persistence
-    # but we might need internal assets like the favicon from the bundled data
     INTERNAL_DATA_DIR = os.path.join(INTERNAL_DIR, "data")
     
     # Path for logs in APPDATA
@@ -27,6 +25,11 @@ if getattr(sys, 'frozen', False):
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
     STARTUP_LOG = os.path.join(LOG_DIR, "startup_error.log")
+    
+    # Redirect stdout and stderr to a log file in APPDATA to avoid crashes in --noconsole mode
+    # when the app tries to print but there is no terminal.
+    sys.stdout = open(os.path.join(LOG_DIR, "server_stdout.log"), "w", encoding="utf-8", buffering=1)
+    sys.stderr = open(os.path.join(LOG_DIR, "server_stderr.log"), "w", encoding="utf-8", buffering=1)
 else:
     # Running in development
     FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
