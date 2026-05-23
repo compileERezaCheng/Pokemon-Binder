@@ -28,9 +28,20 @@ This is a local-first, highly visual, glassmorphic double-page digital card albu
 
 ## 🚀 Getting Started
 
-Simply double-click **`Pokemon Binder.vbs`** in the project folder.
-- **How it works**: Spawns the backend server silently in the background and opens the app in a clean, dedicated window using Microsoft Edge's App Mode (no browser frame, tabs, or address bar).
+Simply double-click **`Pokemon Binder.exe`** in the project folder.
+- **How it works**: Spawns the backend server windowlessly in the background and opens the app in a clean, dedicated window using Microsoft Edge's App Mode. On first launch, it will ask if you want to create a Desktop shortcut.
 - **Stopping the app**: Simply close the window. The background server automatically detects that the window has been closed (via a client heartbeat) and shuts itself down after 12 seconds to free up port `8000`. You can also click the "Stop Server" button inside the sidebar to shut it down instantly.
+
+---
+
+## 🛠️ Development
+
+If you want to modify the launcher executable:
+- The C# source code is located in the `src/` folder.
+- You can recompile it using the Windows C# compiler:
+  ```bash
+  C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:"Pokemon Binder.exe" /r:System.Windows.Forms.dll,System.dll src\launcher.cs
+  ```
 
 ---
 
