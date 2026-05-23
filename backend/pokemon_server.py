@@ -19,10 +19,7 @@ PORT = 8000
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def end_headers(self):
-        # Prevent caching for development/quick changes
-        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
+        # Call superclass end_headers directly. Caching headers are now managed on a per-response basis.
         super().end_headers()
 
     def do_GET(self):
@@ -32,26 +29,28 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Static files mapping
         if path == '/' or path == '/index.html':
-            self.serve_file(os.path.join(FRONTEND_DIR, 'index.html'), 'text/html; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.html'), 'text/html; charset=utf-8', cache_age=0)
         elif path == '/index.css':
-            self.serve_file(os.path.join(FRONTEND_DIR, 'index.css'), 'text/css; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.css'), 'text/css; charset=utf-8', cache_age=0)
         elif path == '/index.js':
-            self.serve_file(os.path.join(FRONTEND_DIR, 'index.js'), 'application/javascript; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.js'), 'application/javascript; charset=utf-8', cache_age=0)
         elif path == '/cover_image.png':
-            self.serve_file(os.path.join(DATA_DIR, 'cover_image.png'), 'image/png')
+            self.serve_file(os.path.join(DATA_DIR, 'cover_image.png'), 'image/png', cache_age=0)
         elif path == '/favicon.ico':
-            self.serve_file(os.path.join(DATA_DIR, 'pokeball.ico'), 'image/x-icon')
+            # Favicon is completely static, cache for 1 day
+            self.serve_file(os.path.join(DATA_DIR, 'pokeball.ico'), 'image/x-icon', cache_age=86400)
             
         # API Endpoints
         elif path == '/api/collection':
-            self.send_json(pokemon_binder.load_collection())
+            self.send_json(pokemon_binder.load_collection(), cache_age=0)
             
         elif path == '/api/settings':
-            self.send_json(pokemon_binder.load_config())
+            self.send_json(pokemon_binder.load_config(), cache_age=0)
             
         elif path == '/api/pokemon-db':
+            # Pokémon Dex Species Database is 50KB and static, cache for 1 day
             db = pokemon_binder.load_pokemon_database()
-            self.send_json(db)
+            self.send_json(db, cache_age=86400)
             
         elif path == '/api/suggest-position':
             self.handle_suggest_position(query)
@@ -90,7 +89,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404, "API Endpoint Not Found")
 
-    def serve_file(self, filename, content_type):
+    def serve_file(self, filename, content_type, cache_age=0):
         if not os.path.exists(filename):
             self.send_error(404, f"File {filename} not found")
             return
@@ -101,17 +100,29 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(content)))
+            if cache_age > 0:
+                self.send_header('Cache-Control', f'public, max-age={cache_age}')
+            else:
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
             self.end_headers()
             self.wfile.write(content)
         except Exception as e:
             self.send_error(500, f"Error reading file: {str(e)}")
 
-    def send_json(self, data, status=200):
+    def send_json(self, data, status=200, cache_age=0):
         try:
             response_content = json.dumps(data).encode('utf-8')
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(response_content)))
+            if cache_age > 0:
+                self.send_header('Cache-Control', f'public, max-age={cache_age}')
+            else:
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
             self.end_headers()
             self.wfile.write(response_content)
         except Exception as e:
@@ -119,6 +130,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(500)
             self.end_headers()
             self.wfile.write(f"{{\"success\": false, \"error\": \"Serialization failed: {str(e)}\"}}".encode('utf-8'))
+
 
     def handle_suggest_position(self, query_params):
         try:
