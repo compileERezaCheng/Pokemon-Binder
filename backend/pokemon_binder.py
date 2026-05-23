@@ -11,9 +11,18 @@ if sys.platform == 'win32':
     os.system('color')
 
 # Configuration constants
-CONFIG_FILE = "binder_config.json"
-DATA_FILE = "pokemon_binder.csv"
-CACHE_FILE = "pokemon_cache.json"
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+CONFIG_FILE = os.path.join(DATA_DIR, "binder_config.json")
+DATA_FILE = os.path.join(DATA_DIR, "pokemon_binder.csv")
+CACHE_FILE = os.path.join(DATA_DIR, "pokemon_cache.json")
+
+# Auto-create data directory if not exists
+if not os.path.exists(DATA_DIR):
+    try:
+        os.makedirs(DATA_DIR)
+    except Exception:
+        pass
+
 
 DEFAULT_CONFIG = {
     "rows": 3,
@@ -228,15 +237,16 @@ def get_gspread_client():
     except ImportError:
         return None, "Google Sheets libraries (gspread, google-auth) are not installed.\n       Please run via 'run_binder.bat' to install dependencies."
         
-    if not os.path.exists("credentials.json"):
-        return None, "credentials.json key file is missing in the workspace folder. Run Settings -> option 3 for help."
+    credentials_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.json"))
+    if not os.path.exists(credentials_path):
+        return None, "credentials.json key file is missing in the backend folder. Run Settings -> option 3 for help."
         
     try:
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        credentials = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+        credentials = Credentials.from_service_account_file(credentials_path, scopes=scopes)
         client = gspread.authorize(credentials)
         return client, None
     except Exception as e:
@@ -300,9 +310,10 @@ def sync_with_google_sheets(config, collection):
 
 def print_google_sheets_setup_guide():
     email = "your-service-account-email@...gserviceaccount.com"
-    if os.path.exists("credentials.json"):
+    credentials_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.json"))
+    if os.path.exists(credentials_path):
         try:
-            with open("credentials.json") as f:
+            with open(credentials_path) as f:
                 email = json.load(f).get("client_email", email)
         except Exception:
             pass

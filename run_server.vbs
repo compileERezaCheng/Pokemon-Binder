@@ -11,7 +11,7 @@ On Error Resume Next
 
 ' Launch the Python server in the background (0 = Hidden, False = Don't wait for completion)
 ' Using python.exe with 0 (hidden) is more reliable than pythonw.exe on many Windows systems.
-WshShell.Run "python.exe pokemon_server.py", 0, False
+WshShell.Run "python.exe backend/pokemon_server.py", 0, False
 
 If Err.Number <> 0 Then
     MsgBox "Error: Could not launch python.exe." & vbCrLf & _

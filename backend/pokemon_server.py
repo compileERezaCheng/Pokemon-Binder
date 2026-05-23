@@ -10,6 +10,8 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pokemon_binder
 
+FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 PORT = 8000
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -27,13 +29,13 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Static files mapping
         if path == '/' or path == '/index.html':
-            self.serve_file('index.html', 'text/html; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.html'), 'text/html; charset=utf-8')
         elif path == '/index.css':
-            self.serve_file('index.css', 'text/css; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.css'), 'text/css; charset=utf-8')
         elif path == '/index.js':
-            self.serve_file('index.js', 'application/javascript; charset=utf-8')
+            self.serve_file(os.path.join(FRONTEND_DIR, 'index.js'), 'application/javascript; charset=utf-8')
         elif path == '/cover_image.png':
-            self.serve_file('cover_image.png', 'image/png')
+            self.serve_file(os.path.join(DATA_DIR, 'cover_image.png'), 'image/png')
             
         # API Endpoints
         elif path == '/api/collection':
@@ -191,7 +193,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             import base64
             decoded_bytes = base64.b64decode(base64_str)
             
-            filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cover_image.png")
+            filepath = os.path.join(DATA_DIR, "cover_image.png")
             with open(filepath, "wb") as f:
                 f.write(decoded_bytes)
                 

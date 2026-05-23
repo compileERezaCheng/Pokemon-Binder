@@ -1,12 +1,12 @@
 # Credentials & API Keys
-credentials.json
+backend/credentials.json
 
 # Local Python caches
-__pycache__/
+backend/__pycache__/
 *.pyc
 
 # Local cover uploads (optional, but keeps repo clean)
-cover_image.png
+data/cover_image.png
 
 # Editor settings
 .vscode/
