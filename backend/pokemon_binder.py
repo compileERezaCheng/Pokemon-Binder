@@ -4,6 +4,7 @@ import csv
 import json
 import urllib.request
 import urllib.error
+import shutil
 from datetime import datetime
 
 # Initialize ANSI color support on Windows
@@ -23,13 +24,31 @@ if not os.path.exists(DATA_DIR):
     except Exception:
         pass
 
+# Copy default templates if they do not exist
+try:
+    if not os.path.exists(CONFIG_FILE):
+        default_config_path = CONFIG_FILE + ".default"
+        if os.path.exists(default_config_path):
+            shutil.copy(default_config_path, CONFIG_FILE)
+    if not os.path.exists(DATA_FILE):
+        default_data_path = DATA_FILE + ".default"
+        if os.path.exists(default_data_path):
+            shutil.copy(default_data_path, DATA_FILE)
+except Exception:
+    pass
 
 DEFAULT_CONFIG = {
     "rows": 3,
     "cols": 3,
     "mode": "dex",  # "dex" (National Dex order) or "sequential" (fill order)
     "gsheet_enabled": False,
-    "gsheet_name": ""
+    "gsheet_name": "",
+    "cover_title": "Pokémon Collection",
+    "cover_subtitle": "My Binder Manager",
+    "cover_owner": "Ash",
+    "cover_color": "#e02424",
+    "cover_featured_dex": 25,
+    "cover_source": "dex"
 }
 
 # Color constants
