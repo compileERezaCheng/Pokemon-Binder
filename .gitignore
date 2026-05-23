@@ -5,7 +5,10 @@ backend/credentials.json
 backend/__pycache__/
 *.pyc
 
-# Local cover uploads (optional, but keeps repo clean)
+# User Data & Local Cache
+data/pokemon_binder.csv
+data/binder_config.json
+data/pokemon_cache.json
 data/cover_image.png
 
 # Editor settings
