@@ -28,22 +28,9 @@ This is a local-first, highly visual, glassmorphic double-page digital card albu
 
 ## 🚀 Getting Started
 
-### 1. Standalone Desktop App (Recommended) 🖥️
-Simply double-click **`run_app.bat`** in the project folder.
-- **First-time launch**: It will automatically download the required lightweight `pywebview` module.
-- **How it works**: Spawns the server silently in the background and opens the app in a clean, dedicated window (no browser frame, tabs, or address bar).
-- **Stopping the app**: Simply close the window. The background server is automatically terminated.
-
-### 2. Browser Web Interface Alternative
-If you prefer running the app inside your default web browser:
-
-#### Option A: Run Silently in the Background
-1. Double-click **`run_server.vbs`** in the project folder. This launches the server silently in the background and opens your browser.
-2. To stop the server, click the **"Stop Server"** button at the bottom of the sidebar, or double-click **`stop_server.bat`**.
-
-#### Option B: Run with a Visible Terminal Window
-1. Double-click **`run_server.bat`** in the project folder.
-2. To stop the server, press `Ctrl + C` inside the terminal window or close the window.
+Simply double-click **`Pokemon Binder.vbs`** in the project folder.
+- **How it works**: Spawns the backend server silently in the background and opens the app in a clean, dedicated window using Microsoft Edge's App Mode (no browser frame, tabs, or address bar).
+- **Stopping the app**: Simply close the window. The background server automatically detects that the window has been closed (via a client heartbeat) and shuts itself down after 12 seconds to free up port `8000`. You can also click the "Stop Server" button inside the sidebar to shut it down instantly.
 
 ---
 
