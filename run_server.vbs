@@ -1,4 +1,12 @@
+Dim WshShell, fso, scriptDir
 Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+
+' Get the directory of this VBScript file
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+' Change current directory to the script's folder
+WshShell.CurrentDirectory = scriptDir
+
 On Error Resume Next
 
 ' Launch the Python server in the background (0 = Hidden, False = Don't wait for completion)
@@ -11,6 +19,6 @@ If Err.Number <> 0 Then
 Else
     ' Wait half a second for the server to bind to the port
     WScript.Sleep 500
-    ' Open the browser to localhost:8000
-    WshShell.Run "cmd.exe /c start http://localhost:8000", 0, False
+    ' Open the browser to localhost:8000 directly (no cmd window)
+    WshShell.Run "http://localhost:8000"
 End If
