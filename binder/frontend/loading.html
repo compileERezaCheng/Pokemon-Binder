@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pokémon Binder Manager</title>
+    <style>
+        body {
+            background-color: #0a0b10;
+            color: #f1f3f9;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        .container {
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0)); }
+            50% { transform: scale(1.1); filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.6)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0)); }
+        }
+        h2 {
+            font-weight: 600;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        .status-text {
+            color: #9aa0b9;
+            font-size: 14px;
+            margin-bottom: 25px;
+            height: 20px;
+        }
+        .progress-bg {
+            background-color: rgba(255, 255, 255, 0.05);
+            height: 6px;
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        .progress-fill {
+            background: linear-gradient(90deg, #ef4444, #f59e0b);
+            height: 100%;
+            width: 0%;
+            border-radius: 10px;
+            transition: width 0.4s ease;
+        }
+        .percentage {
+            font-size: 12px;
+            color: #5e647e;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <svg class="logo" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="45" fill="none" stroke="#ef4444" stroke-width="8"/>
+            <line x1="5" y1="50" x2="95" y2="50" stroke="#ef4444" stroke-width="8"/>
+            <circle cx="50" cy="50" r="18" fill="#1a1d2e" stroke="#ef4444" stroke-width="8"/>
+            <circle cx="50" cy="50" r="6" fill="#ef4444"/>
+        </svg>
+        <h2>PokeBinder</h2>
+        <div class="status-text" id="status">Initializing modules...</div>
+        
+        <div class="progress-bg">
+            <div class="progress-fill" id="progress"></div>
+        </div>
+        <div class="percentage" id="percent">0%</div>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const progressEl = document.getElementById('progress');
+        const percentEl = document.getElementById('percent');
+
+        const steps = [
+            { p: 15, t: "Booting backend server..." },
+            { p: 30, t: "Loading Pokédex database..." },
+            { p: 50, t: "Caching species sprites..." },
+            { p: 75, t: "Syncing local collection..." },
+            { p: 90, t: "Finalizing UI components..." },
+            { p: 100, t: "Ready!" }
+        ];
+
+        let currentStep = 0;
+        
+        function updateProgress() {
+            if (currentStep < steps.length) {
+                const step = steps[currentStep];
+                progressEl.style.width = step.p + "%";
+                percentEl.innerText = step.p + "%";
+                statusEl.innerText = step.t;
+                currentStep++;
+                
+                const delay = currentStep === steps.length ? 800 : Math.random() * 600 + 400;
+                setTimeout(updateProgress, delay);
+            } else {
+                // When done, check if server is actually ready and redirect
+                checkReady();
+            }
+        }
+
+        async function checkReady() {
+            try {
+                const res = await fetch('/api/heartbeat', { method: 'POST' });
+                if (res.ok) {
+                    window.location.href = "/index.html";
+                } else {
+                    setTimeout(checkReady, 500);
+                }
+            } catch (e) {
+                setTimeout(checkReady, 500);
+            }
+        }
+
+        // Start progress simulation
+        setTimeout(updateProgress, 500);
+    </script>
+</body>
+</html>

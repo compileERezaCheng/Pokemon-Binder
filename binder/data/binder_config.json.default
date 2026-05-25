@@ -1,0 +1,13 @@
+{
+    "rows": 3,
+    "cols": 3,
+    "mode": "dex",
+    "gsheet_enabled": false,
+    "gsheet_name": "",
+    "cover_title": "Pokémon Collection",
+    "cover_subtitle": "My Binder Manager",
+    "cover_owner": "Ash",
+    "cover_color": "#e02424",
+    "cover_featured_dex": 25,
+    "cover_source": "pokemon"
+}

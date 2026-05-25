@@ -1,0 +1,43 @@
+# --- SENSITIVE & PRIVATE FILES (STRICT) ---
+gradingAPP/
+URGENT_UPDATES.md
+temp.md
+secrets.properties
+*.apk
+*.exe
+
+# --- PROJECT CONTEXT ---
+binder/PROJECT_CONTEXT.md
+
+# --- PC APP (Python/Web) ---
+# Credentials & API Keys
+binder/backend/credentials.json
+binder/backend/firebase_secrets.py
+
+# Local Python caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# PyInstaller
+binder/build/
+binder/dist/
+**/*.spec
+
+# User Data & Local Cache
+binder/data/pokemon_binder.csv
+binder/data/binder_config.json
+binder/data/pokemon_cache.json
+binder/data/cover_image.png
+binder/data/sync_state.json
+binder/data/debug_sync.log
+
+# Windows junk
+Thumbs.db
+Desktop.ini
+
+# Editor settings
+.vscode/
+.idea/
+.antigravitycli/

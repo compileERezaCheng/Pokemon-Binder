@@ -1,0 +1,4 @@
+# Treat the launcher executable as a binary file
+*.exe binary
+*.ico binary
+*.png binary

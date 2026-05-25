@@ -1,0 +1,2658 @@
+/* ==================== CUSTOM STYLING SYSTEM ==================== */
+
+:root {
+    /* Color Palette */
+    --bg-app: #0a0b10;
+    --bg-sidebar: rgba(18, 19, 28, 0.7);
+    --bg-card: rgba(26, 29, 46, 0.65);
+    --bg-input: rgba(36, 40, 62, 0.6);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --text-primary: #f1f3f9;
+    --text-secondary: #9aa0b9;
+    --text-muted: #5e647e;
+    
+    /* Accents */
+    --color-primary: #ef4444; /* Pokéball Red */
+    --color-primary-glow: rgba(239, 68, 68, 0.35);
+    --color-success: #10b981;
+    --color-warning: #f59e0b;
+    --color-info: #3b82f6;
+    
+    /* Card Conditions */
+    --cond-nm: #10b981;
+    --cond-lp: #3b82f6;
+    --cond-mp: #f59e0b;
+    --cond-hp: #ef4444;
+    
+    /* Layout Constants */
+    --sidebar-width: 260px;
+    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-sm: 6px;
+    --transition-fast: 0.2s ease;
+    --transition-smooth: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    
+    /* Grid settings dynamically configured in JS */
+    --rows: 3;
+    --cols: 3;
+}
+
+/* Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    background-image: 
+        radial-gradient(circle at 10% 20%, rgba(239, 68, 68, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 40%);
+}
+
+h1, h2, h3, .logo-area h2 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+}
+
+button, input, select {
+    font-family: inherit;
+    color: inherit;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* App Container Layout */
+.app-container {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* ==================== SIDEBAR STYLING ==================== */
+.sidebar {
+    width: var(--sidebar-width);
+    background-color: var(--bg-sidebar);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: 24px 16px;
+    z-index: 10;
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px 28px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.pokeball-icon-container {
+    color: var(--color-primary);
+    filter: drop-shadow(0 0 6px var(--color-primary-glow));
+}
+
+.pokeball-svg {
+    animation: rotate 15s linear infinite;
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.logo-area h2 {
+    font-size: 20px;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 40%, var(--text-secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 24px;
+    flex-grow: 1;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: var(--transition-fast);
+    text-align: left;
+}
+
+.nav-item:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.nav-item.active {
+    color: var(--text-primary);
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.03) 100%);
+    box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.nav-icon {
+    opacity: 0.7;
+    transition: var(--transition-fast);
+}
+
+.nav-item.active .nav-icon {
+    opacity: 1;
+    color: var(--color-primary);
+}
+
+.sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+.sync-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+    transition: var(--transition-fast);
+}
+
+.sync-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(239, 68, 68, 0.35);
+}
+
+.sync-button:active {
+    transform: translateY(1px);
+}
+
+.stop-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.stop-button:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #ef4444;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+}
+
+.stop-button:active {
+    transform: translateY(1px);
+}
+
+.api-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-dot.online {
+    background-color: var(--color-success);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+.status-dot.loading {
+    background-color: var(--color-warning);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+    animation: pulse 1.2s infinite alternate;
+}
+
+@keyframes pulse {
+    0% { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+
+.status-text {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* ==================== MAIN CONTENT & HEADER ==================== */
+.main-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 30px;
+    overflow-y: auto;
+}
+
+.dashboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.header-title h1 {
+    font-size: 26px;
+    letter-spacing: -0.5px;
+}
+
+.header-title .subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+.stats-container {
+    display: flex;
+    gap: 16px;
+}
+
+.stat-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 12px 20px;
+    min-width: 140px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.stat-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.stat-card h3 {
+    font-size: 20px;
+    font-family: 'Outfit', sans-serif;
+    color: var(--text-primary);
+}
+
+.stat-progress-bar {
+    width: 100%;
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+}
+
+#stat-progress-fill {
+    height: 100%;
+    background-color: var(--color-success);
+    border-radius: 2px;
+    transition: width 0.5s ease-out;
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge.synced {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: var(--color-success);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.badge.disabled {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ==================== VIEWS MANAGEMENT ==================== */
+.view-section {
+    display: none;
+    animation: fadeIn 0.25s ease-out;
+}
+
+.view-section.active {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==================== VIEW 1: BINDER GRID VIEW ==================== */
+.section-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    padding: 6px 12px;
+    border-radius: var(--radius-lg);
+}
+
+.action-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.action-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+}
+
+.page-indicator-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.page-indicator-wrapper input {
+    width: 50px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    text-align: center;
+    font-weight: 600;
+}
+
+/* Custom Webkit spinner override */
+.page-indicator-wrapper input::-webkit-outer-spin-button,
+.page-indicator-wrapper input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.binder-book-container {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 0;
+    width: 100%;
+}
+
+.binder-book {
+    display: flex;
+    width: 100%;
+    max-width: 1300px;
+    background: linear-gradient(135deg, #131520 0%, #0d0e14 100%);
+    border: 6px solid #1c1d29;
+    border-radius: 28px;
+    box-shadow: 
+        0 30px 90px rgba(0, 0, 0, 0.65),
+        inset 0 0 20px rgba(255, 255, 255, 0.02);
+    position: relative;
+    padding: 12px;
+    overflow: hidden;
+}
+
+.binder-page {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 20px 20px 20px;
+    background-color: rgba(255, 255, 255, 0.005);
+    border-radius: 20px;
+    position: relative;
+}
+
+.left-page {
+    border-right: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.right-page {
+    border-left: 1px solid rgba(255, 255, 255, 0.01);
+}
+
+.page-number-banner {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    background-color: rgba(255, 255, 255, 0.02);
+    padding: 4px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    align-self: center;
+}
+
+/* Central Binder Spine */
+.binder-spine {
+    width: 32px;
+    background: linear-gradient(90deg, #090a10, #222538 50%, #090a10);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    align-items: center;
+    box-shadow: 
+        inset 5px 0 10px rgba(0,0,0,0.5),
+        inset -5px 0 10px rgba(0,0,0,0.5);
+    z-index: 5;
+    padding: 20px 0;
+}
+
+.binder-ring {
+    width: 12px;
+    height: 48px;
+    border: 3px solid #71717a;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #e4e4e7, #71717a, #3f3f46);
+    box-shadow: 
+        2px 4px 8px rgba(0, 0, 0, 0.6),
+        inset -1px -1px 3px rgba(0, 0, 0, 0.5);
+    position: relative;
+}
+
+.binder-ring::before {
+    content: '';
+    position: absolute;
+    width: 6px;
+    height: 4px;
+    background-color: #27272a;
+    top: 50%;
+    left: -6px;
+    transform: translateY(-50%);
+    border-radius: 2px 0 0 2px;
+}
+
+.binder-grid-inner {
+    display: grid;
+    grid-template-rows: repeat(var(--rows), 1fr);
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: 16px;
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    position: relative;
+}
+
+/* Pocket Slot Element */
+.binder-pocket {
+    position: relative;
+    border-radius: var(--radius-lg);
+    background-color: rgba(255, 255, 255, 0.015);
+    border: 1.5px dashed rgba(255, 255, 255, 0.08);
+    transition: var(--transition-smooth);
+    overflow: visible;
+}
+
+.binder-pocket:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.pocket-label {
+    position: absolute;
+    top: 10px;
+    left: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+/* Empty Pocket Add Button */
+.empty-slot-btn {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--text-muted);
+    transition: var(--transition-fast);
+}
+
+.empty-slot-btn:hover {
+    color: var(--text-secondary);
+}
+
+.empty-slot-btn svg {
+    transform: scale(1);
+    transition: var(--transition-smooth);
+}
+
+.empty-slot-btn:hover svg {
+    transform: scale(1.15);
+    color: var(--color-primary);
+    filter: drop-shadow(0 0 4px var(--color-primary-glow));
+}
+
+/* Occupied Card Component */
+.pokemon-card-container {
+    width: 100%;
+    height: 100%;
+    perspective: 800px;
+    cursor: pointer;
+}
+
+.pokemon-card-preview {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.pokemon-card-container:hover .pokemon-card-preview {
+    transform: translateY(-4px) rotateY(4deg) rotateX(4deg);
+}
+
+.card-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: linear-gradient(135deg, rgba(30, 33, 58, 0.9) 0%, rgba(18, 19, 33, 0.95) 100%);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+}
+
+.pokemon-card-container:hover .card-inner {
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 
+        0 15px 35px rgba(0, 0, 0, 0.5),
+        0 0 15px rgba(255, 255, 255, 0.05);
+}
+
+/* Card Visual Sections */
+.card-front {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+
+.card-image-frame {
+    flex-grow: 1;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.06) 100%);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Shimmer overlay on hover - only for normal/non-special cards */
+.pokemon-card-container:not(.Holo):not(.Reverse):not(.Double):not(.Ultra):not(.Secret):not(.Special):not(.Hyper):not(.Shiny):not(.Ace):not(.MegaAttack):not(.MegaHyper):hover .card-image-frame::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: linear-gradient(45deg, transparent 45%, rgba(255, 255, 255, 0.1) 50%, transparent 55%);
+    transform: rotate(30deg);
+    animation: shimmer 1.5s ease-out;
+}
+
+@keyframes shimmer {
+    from { transform: translate(-30%, -30%) rotate(30deg); }
+    to { transform: translate(30%, 30%) rotate(30deg); }
+}
+
+.card-image-frame img {
+    max-width: 90%;
+    max-height: 90%;
+    object-fit: contain;
+    filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.45));
+    transition: var(--transition-smooth);
+}
+
+.pokemon-card-container:hover .card-image-frame img {
+    transform: scale(1.08);
+}
+
+/* Placeholders */
+.card-placeholder-pokeball {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.15;
+}
+
+.pokeball-circle {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 4px solid var(--text-primary);
+    position: relative;
+}
+
+.pokeball-circle::before {
+    content: '';
+    position: absolute;
+    left: -4px;
+    right: -4px;
+    top: 20px;
+    height: 4px;
+    background-color: var(--text-primary);
+}
+
+.pokeball-circle::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background-color: var(--bg-app);
+    border: 3px solid var(--text-primary);
+    top: 13px;
+    left: 13px;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+    padding: 0 4px;
+}
+
+.card-name {
+    font-size: 13px;
+    font-weight: 700;
+    font-family: 'Outfit', sans-serif;
+    letter-spacing: -0.2px;
+    color: var(--text-primary);
+    text-transform: capitalize;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 70%;
+}
+
+.card-dex-number {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.card-body {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 4px;
+}
+
+.card-spec {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.card-notes-preview {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+/* Stack count indicator badge */
+.card-stack-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: linear-gradient(135deg, var(--color-info) 0%, #1d4ed8 100%);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    border: 1.5px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.35);
+    z-index: 2;
+}
+
+/* Condition styling rules */
+.badge.NM { background-color: rgba(16, 185, 129, 0.15); color: var(--cond-nm); border: 1px solid rgba(16, 185, 129, 0.25); }
+.badge.LP { background-color: rgba(59, 130, 246, 0.15); color: var(--cond-lp); border: 1px solid rgba(59, 130, 246, 0.25); }
+.badge.MP { background-color: rgba(245, 158, 11, 0.15); color: var(--cond-mp); border: 1px solid rgba(245, 158, 11, 0.25); }
+.badge.HP { background-color: rgba(239, 68, 68, 0.15); color: var(--cond-hp); border: 1px solid rgba(239, 68, 68, 0.25); }
+
+/* ==================== VIEW 2: COLLECTION LIST TABLE ==================== */
+.table-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    padding: 12px 16px;
+    border-radius: var(--radius-lg);
+}
+
+.search-box-wrapper {
+    position: relative;
+    flex-grow: 1;
+    max-width: 400px;
+}
+
+.search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.search-box-wrapper input {
+    width: 100%;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 10px 12px 10px 38px; font-size: 14px;
+    transition: var(--transition-fast);
+}
+
+.search-box-wrapper input:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+
+.filter-dropdowns {
+    display: flex;
+    gap: 10px;
+}
+
+.filter-dropdowns select {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.filter-dropdowns select:focus {
+    outline: none;
+}
+
+.toggle-repeated-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 14px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    white-space: nowrap;
+    user-select: none;
+}
+
+.toggle-repeated-btn:hover {
+    border-color: rgba(255,255,255,0.2);
+    color: var(--text-primary);
+}
+
+.toggle-repeated-btn.active {
+    border-color: rgba(52, 211, 153, 0.4);
+    box-shadow: 0 0 10px rgba(52, 211, 153, 0.12);
+}
+
+.toggle-repeated-icon {
+    font-size: 16px;
+    line-height: 1;
+    opacity: 0.7;
+}
+
+.toggle-repeated-label {
+    font-weight: 500;
+}
+
+.toggle-repeated-pill {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    padding: 2px 7px;
+    border-radius: 10px;
+}
+
+.toggle-repeated-pill.off {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+}
+
+.toggle-repeated-pill.on {
+    background: rgba(52, 211, 153, 0.18);
+    color: #34d399;
+    border: 1px solid rgba(52, 211, 153, 0.35);
+}
+
+
+.table-responsive {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    background-color: var(--bg-card);
+    overflow: hidden;
+}
+
+.collection-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 15px;
+}
+
+.collection-table th {
+    background-color: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--border-color);
+    padding: 16px 18px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.collection-table td {
+    padding: 18px 18px;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.collection-table tbody tr {
+    transition: var(--transition-fast);
+}
+
+.collection-table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.015);
+}
+
+.table-pokemon-cell {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.table-sprite-frame {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-sm);
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.table-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 700;
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.2);
+}
+
+.table-count-single {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-color);
+}
+
+.table-sprite-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.table-poke-name {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    text-transform: capitalize;
+    color: var(--text-primary);
+}
+
+.btn-icon-danger {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    transition: var(--transition-fast);
+}
+
+.btn-icon-danger:hover {
+    color: var(--color-primary);
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+.no-cards-placeholder {
+    padding: 50px 20px;
+    text-align: center;
+}
+
+.placeholder-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+}
+
+.no-cards-placeholder h3 {
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+}
+
+.no-cards-placeholder p {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ==================== VIEW 3: ADD CARD FORM ==================== */
+.form-container {
+    display: flex;
+    gap: 30px;
+    max-width: 1000px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.form-main {
+    flex-grow: 1;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 24px 30px;
+}
+
+.form-section-title {
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 18px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.form-section-title:not(:first-child) {
+    margin-top: 24px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+    position: relative;
+}
+
+.form-group label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.form-group input, .form-group select {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: 14px;
+    transition: var(--transition-fast);
+}
+
+.form-group input:focus, .form-group select:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+
+.form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+/* Autocomplete suggestions dropdown box */
+.autocomplete-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.autocomplete-suggestions-box {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background-color: #121422;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    z-index: 20;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.suggestion-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.suggestion-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.suggestion-item.active-selection {
+    background-color: rgba(239, 68, 68, 0.15);
+}
+
+.suggestion-sprite {
+    width: 32px;
+    height: 32px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.suggestion-sprite img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.suggestion-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.suggestion-name {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.suggestion-dex {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Suggested position banners */
+.suggested-banner, .slot-warning-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    margin-bottom: 18px;
+    font-size: 13px;
+}
+
+.suggested-banner {
+    background-color: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+}
+
+.slot-warning-banner {
+    background-color: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    color: #fde047;
+}
+
+.banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.banner-label {
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.7;
+}
+
+.banner-subtext {
+    font-size: 11px;
+    opacity: 0.85;
+    margin-top: 4px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.btn-primary, .btn-secondary, .btn-danger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.btn-primary {
+    background-color: var(--text-primary);
+    color: var(--bg-app);
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(255, 255, 255, 0.1);
+}
+
+.btn-secondary {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.btn-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+}
+
+.btn-danger {
+    background-color: var(--color-primary);
+    color: #fff;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+}
+
+.btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px var(--color-primary-glow);
+}
+
+/* Holographic preview visual container */
+.card-preview-area {
+    width: 280px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 20px;
+}
+
+.card-preview-area .pokemon-card-container {
+    height: 380px;
+}
+
+/* ==================== VIEW 4: SETTINGS VIEW ==================== */
+.settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    max-width: 1000px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.settings-box {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 24px 30px;
+}
+
+.settings-box h2 {
+    font-size: 18px;
+    margin-bottom: 6px;
+}
+
+.settings-box .muted-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+}
+
+.settings-form {
+    display: flex;
+    flex-direction: column;
+}
+
+.button-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+/* Toggle Switch Styling */
+.toggle-group {
+    margin-bottom: 20px;
+}
+
+.switch-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.switch-label input {
+    display: none;
+}
+
+.switch-custom {
+    position: relative;
+    width: 44px;
+    height: 22px;
+    background-color: var(--bg-input);
+    border: 1.5px solid var(--border-color);
+    border-radius: 20px;
+    transition: var(--transition-fast);
+}
+
+.switch-custom::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background-color: var(--text-secondary);
+    top: 2.5px;
+    left: 3px;
+    transition: var(--transition-fast);
+}
+
+.switch-label input:checked + .switch-custom {
+    background-color: var(--color-success);
+    border-color: transparent;
+}
+
+.switch-label input:checked + .switch-custom::after {
+    left: 24px;
+    background-color: #fff;
+}
+
+/* Step guide styling */
+.collapsible-guide {
+    margin-top: 24px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.guide-toggle {
+    width: 100%;
+    background-color: rgba(255, 255, 255, 0.02);
+    border: none;
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: var(--transition-fast);
+}
+
+.guide-toggle:hover {
+    color: var(--text-primary);
+}
+
+.chevron-icon {
+    transition: transform var(--transition-fast);
+}
+
+.guide-toggle.open .chevron-icon {
+    transform: rotate(180deg);
+}
+
+.guide-content {
+    padding: 16px 20px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    background-color: rgba(0, 0, 0, 0.15);
+    border-top: 1px solid var(--border-color);
+}
+
+.guide-content ol {
+    padding-left: 20px;
+}
+
+.guide-content li {
+    margin-bottom: 8px;
+}
+
+.guide-content a {
+    color: var(--color-info);
+    text-decoration: none;
+}
+
+.guide-content a:hover {
+    text-decoration: underline;
+}
+
+/* ==================== TOAST NOTIFICATIONS ==================== */
+.notification-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background-color: rgba(18, 20, 32, 0.95);
+    border: 1px solid var(--border-color);
+    padding: 14px 20px;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.30s cubic-bezier(0.175, 0.885, 0.32, 1.25);
+}
+
+@keyframes slideIn {
+    from { transform: translateY(30px) scale(0.9); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.notification-toast::before {
+    content: 'i';
+    width: 20px;
+    height: 20px;
+    background-color: var(--color-info);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 11px;
+}
+
+.notification-toast.success::before {
+    content: '✓';
+    background-color: var(--color-success);
+}
+
+.notification-toast.error::before {
+    content: '✗';
+    background-color: var(--color-primary);
+}
+
+.toast-message {
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+/* ==================== MODAL OVERLAY & POPUP ==================== */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 20px;
+    animation: fadeInModal 0.2s ease-out;
+}
+
+@keyframes fadeInModal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-card-content {
+    background-color: #121422;
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    width: 100%;
+    max-width: 680px;
+    position: relative;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+    animation: popUpModal 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.25);
+}
+
+@keyframes popUpModal {
+    from { transform: scale(0.9) translateY(20px); }
+    to { transform: scale(1) translateY(0); }
+}
+
+.modal-close-btn {
+    position: absolute;
+    top: 18px;
+    right: 18px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 50%;
+    transition: var(--transition-fast);
+    z-index: 5;
+}
+
+.modal-close-btn:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.modal-body-layout {
+    display: flex;
+    padding: 30px;
+    gap: 30px;
+}
+
+.modal-card-visual {
+    width: 220px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-card-visual .pokemon-card-container {
+    height: 310px;
+}
+
+.modal-card-details {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-card-details h2 {
+    font-size: 24px;
+    text-transform: capitalize;
+    margin-top: 10px;
+}
+
+.date-label {
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.detail-group {
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.detail-group label, #modal-stacked-section label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+
+.notes-content-box {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    min-height: 70px;
+    color: var(--text-secondary);
+}
+
+#modal-stacked-section {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.stacked-cards-list {
+    background-color: rgba(255, 255, 255, 0.01);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 100px;
+    overflow-y: auto;
+}
+
+.stacked-card-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    padding: 8px 12px;
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: none;
+}
+
+.stacked-card-item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+}
+
+.stacked-card-item.selected {
+    background-color: rgba(239, 68, 68, 0.1) !important;
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+    pointer-events: none;
+}
+
+.stacked-info {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.stacked-notes {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.modal-actions {
+    margin-top: auto;
+    padding-top: 24px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ==================== RESPONSIVE DESIGN BREAKPOINTS ==================== */
+@media (max-width: 992px) {
+    .settings-grid, .form-container {
+        grid-template-columns: 1fr;
+        flex-direction: column-reverse;
+        align-items: center;
+    }
+    
+    .card-preview-area {
+        width: 100%;
+        padding-top: 0;
+        margin-bottom: 20px;
+    }
+    
+    .card-preview-area .pokemon-card-container {
+        width: 250px;
+        height: 350px;
+    }
+    
+    .binder-book {
+        flex-direction: column;
+        border-radius: 20px;
+        gap: 16px;
+    }
+    
+    .binder-spine {
+        display: none;
+    }
+    
+    .left-page {
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 30px;
+    }
+}
+
+@media (max-width: 768px) {
+    .app-container {
+        flex-direction: column;
+    }
+    
+    .sidebar {
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        padding: 16px;
+    }
+    
+    .logo-area {
+        padding-bottom: 12px;
+        border-bottom: none;
+    }
+    
+    .nav-menu {
+        flex-direction: row;
+        margin-top: 12px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+    }
+    
+    .nav-item {
+        padding: 8px 12px;
+        font-size: 13px;
+        white-space: nowrap;
+    }
+    
+    .sidebar-footer {
+        display: none; /* Hide footer in mobile view for layout */
+    }
+    
+    .main-content {
+        padding: 20px;
+    }
+    
+    .dashboard-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .stats-container {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 6px;
+    }
+    
+    .modal-body-layout {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .modal-card-visual {
+        width: 100%;
+    }
+}
+
+/* ==================== BINDER COVER PAGE STYLING ==================== */
+.binder-cover {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    width: 100%;
+    padding: 30px;
+    background: linear-gradient(135deg, rgba(20, 21, 33, 0.95) 0%, rgba(10, 11, 16, 0.98) 100%);
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    position: relative;
+    text-align: center;
+    overflow: hidden;
+    aspect-ratio: 3 / 4;
+}
+
+.binder-cover::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 50% 30%, var(--cover-accent-glow, rgba(239, 68, 68, 0.15)) 0%, transparent 60%);
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* Full bleed image cover adjustments */
+.binder-cover.full-bleed {
+    padding: 0;
+    justify-content: flex-end;
+    background: #06070b;
+    border-color: rgba(255, 255, 255, 0.05);
+}
+
+.binder-cover.full-bleed::before {
+    display: none;
+}
+
+.cover-background-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+    transition: transform 0.6s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.binder-cover:hover .cover-background-image {
+    transform: scale(1.04);
+}
+
+.cover-content-overlay {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    padding: 40px 20px 24px 20px;
+    background: linear-gradient(to top, 
+        rgba(10, 11, 16, 0.98) 0%, 
+        rgba(10, 11, 16, 0.75) 60%, 
+        rgba(10, 11, 16, 0) 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.cover-artwork-container {
+    width: 180px;
+    height: 240px;
+    perspective: 1000px;
+    margin-bottom: 24px;
+    z-index: 2;
+}
+
+.cover-card-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+    border: 2px solid var(--cover-accent, #ef4444);
+    box-shadow: 
+        0 15px 35px rgba(0, 0, 0, 0.5),
+        0 0 25px var(--cover-accent-glow, rgba(239, 68, 68, 0.35));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    position: relative;
+    animation: coverFloat 4s ease-in-out infinite;
+}
+
+@keyframes coverFloat {
+    0% { transform: translateY(0) rotate(1deg); }
+    50% { transform: translateY(-8px) rotate(-1deg); }
+    100% { transform: translateY(0) rotate(1deg); }
+}
+
+.cover-card-inner img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 10px 15px rgba(0, 0, 0, 0.5));
+}
+
+.cover-title {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #fff;
+    margin-bottom: 8px;
+    z-index: 2;
+    font-family: 'Outfit', sans-serif;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    text-transform: capitalize;
+}
+
+.cover-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    z-index: 2;
+    max-width: 80%;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.cover-owner-badge {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    z-index: 2;
+    margin-bottom: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+
+.cover-edit-btn {
+    z-index: 2;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    padding: 6px 14px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.cover-edit-btn:hover {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Cover Edit Overlay / Form */
+.cover-edit-overlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(10, 11, 16, 0.98);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    padding: 24px;
+    text-align: left;
+    overflow-y: auto;
+}
+
+.cover-edit-overlay h3 {
+    font-size: 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 8px;
+    font-family: 'Outfit', sans-serif;
+}
+
+/* ==================== TRAINER PROFILE CARD & ACCOUNT SETTINGS STYLING ==================== */
+.trainer-profile-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    margin-bottom: 20px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    transition: var(--transition-smooth);
+}
+.trainer-profile-card:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Firebase Connection Styling */
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.connection-status .status-dot {
+    width: 10px;
+    height: 10px;
+}
+
+.connection-status #firebase-status-text {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.danger-outline {
+    border-color: rgba(239, 68, 68, 0.4) !important;
+    color: #ef4444 !important;
+}
+
+.danger-outline:hover {
+    background-color: rgba(239, 68, 68, 0.05) !important;
+    border-color: #ef4444 !important;
+}
+.trainer-profile-card.active {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--color-primary);
+    box-shadow: 0 0 15px var(--color-primary-glow);
+}
+.trainer-avatar-container {
+    position: relative;
+    width: 88px;
+    height: 88px;
+    flex-shrink: 0;
+    overflow: visible;
+}
+.trainer-avatar-wrapper {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.25);
+    border: 2.5px solid rgba(255, 255, 255, 0.15);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.trainer-avatar-wrapper img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.trainer-online-badge {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    width: 14px;
+    height: 14px;
+    background-color: #10b981;
+    border: 2.5px solid #1a1b26;
+    border-radius: 50%;
+    box-shadow: 0 0 10px #10b981;
+    z-index: 2;
+}
+.trainer-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.trainer-label {
+    font-size: 8px;
+    font-weight: 800;
+    color: var(--text-muted);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+.trainer-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    font-family: 'Outfit', sans-serif;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.form-row-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+}
+@media (max-width: 768px) {
+    .form-row-3 {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Card Rarity Badge Styles */
+.badge.Normal { background-color: rgba(255, 255, 255, 0.05); color: #a1a1aa; border: 1px solid rgba(255, 255, 255, 0.08); }
+.badge.Rare { background-color: rgba(255, 255, 255, 0.08); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.15); }
+.badge.Holo, .badge.Holofoil { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25); text-shadow: 0 0 4px rgba(59, 130, 246, 0.3); }
+.badge.Reverse { background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.25); }
+.badge.Shiny { background-color: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.25); text-shadow: 0 0 6px rgba(6, 182, 212, 0.4); }
+.badge.Double { background-color: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.25); }
+.badge.Ultra { background-color: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.25); text-shadow: 0 0 6px rgba(236, 72, 153, 0.4); }
+.badge.Secret { background-color: rgba(234, 179, 8, 0.15); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.25); text-shadow: 0 0 8px rgba(234, 179, 8, 0.5); }
+.badge.Ace { background-color: rgba(219, 39, 119, 0.2); color: #f472b6; border: 1px solid rgba(219, 39, 119, 0.4); text-shadow: 0 0 6px rgba(219, 39, 119, 0.5); font-weight: 700; }
+.badge.Illustration { background-color: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.25); }
+.badge.Special { background-color: rgba(20, 184, 166, 0.18); color: #2dd4bf; border: 1px solid rgba(234, 179, 8, 0.35); text-shadow: 0 0 6px rgba(20, 184, 166, 0.4); }
+.badge.MegaAttack { background-color: rgba(249, 115, 22, 0.18); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.35); text-shadow: 0 0 6px rgba(249, 115, 22, 0.4); }
+.badge.Hyper { background-color: rgba(234, 179, 8, 0.2); color: #fef08a; border: 1px solid rgba(234, 179, 8, 0.45); text-shadow: 0 0 10px rgba(234, 179, 8, 0.6); }
+.badge.MegaHyper { background-color: rgba(234, 179, 8, 0.25); color: #fef08a; border: 1px solid rgba(234, 179, 8, 0.6); text-shadow: 0 0 12px rgba(234, 179, 8, 0.7); font-weight: 700; }
+
+/* ==================== HOLOGRAPHIC CARD VISUAL EFFECTS ==================== */
+/* 1. Holo Shine (Shimmer inside the pokemon square image frame only) */
+.pokemon-card-container.Holo .card-image-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0) 30%, 
+        rgba(255, 255, 255, 0.08) 40%, 
+        rgba(255, 255, 255, 0.22) 50%, 
+        rgba(255, 255, 255, 0.08) 60%, 
+        rgba(255, 255, 255, 0) 70%
+    );
+    background-size: 200% 200%;
+    background-repeat: no-repeat;
+    background-position: 200% 200%;
+    z-index: 5;
+    pointer-events: none;
+    animation: holoImageSweep 7s ease-in-out infinite;
+}
+.pokemon-card-container.Holo:hover .card-image-frame::after {
+    animation: holoImageSweep 2.5s ease-in-out infinite;
+}
+@keyframes holoImageSweep {
+    0% {
+        background-position: 200% 200%;
+    }
+    100% {
+        background-position: -100% -100%;
+    }
+}
+
+/* 2. Reverse Holo (Shimmer on the card body background, excluding the image square) */
+.pokemon-card-container.Reverse .card-image-frame {
+    position: relative;
+    z-index: 4; /* Float image frame above the shimmer */
+    background: linear-gradient(180deg, #1e213a 0%, #121321 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pokemon-card-container.Reverse .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0) 30%, 
+        rgba(255, 255, 255, 0.06) 40%, 
+        rgba(255, 255, 255, 0.18) 50%, 
+        rgba(255, 255, 255, 0.06) 60%, 
+        rgba(255, 255, 255, 0) 70%
+    );
+    background-size: 200% 200%;
+    background-repeat: no-repeat;
+    background-position: 200% 200%;
+    z-index: 3; /* Draw on top of card body background but below the image frame */
+    pointer-events: none;
+    animation: reverseHoloSweep 7s ease-in-out infinite;
+}
+.pokemon-card-container.Reverse:hover .card-inner::after {
+    animation: reverseHoloSweep 2.5s ease-in-out infinite;
+}
+@keyframes reverseHoloSweep {
+    0% {
+        background-position: 200% 200%;
+    }
+    100% {
+        background-position: -100% -100%;
+    }
+}
+
+/* 3. Ultra Rare Glowing Neon */
+.pokemon-card-container.Ultra .card-inner {
+    border: 1.5px solid rgba(236, 72, 153, 0.45);
+    box-shadow: 0 0 15px rgba(236, 72, 153, 0.15), 0 10px 25px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(38, 16, 45, 0.95) 0%, rgba(12, 8, 20, 0.98) 100%);
+}
+.pokemon-card-container.Ultra:hover .card-inner {
+    border-color: rgba(236, 72, 153, 0.85);
+    box-shadow: 
+        0 0 25px rgba(236, 72, 153, 0.45),
+        0 15px 35px rgba(0, 0, 0, 0.5);
+}
+
+/* 4. Secret Rare Gold Shimmer */
+.pokemon-card-container.Secret .card-inner {
+    border: 1.5px solid rgba(234, 179, 8, 0.55);
+    box-shadow: 0 0 15px rgba(234, 179, 8, 0.15), 0 10px 25px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(46, 40, 16, 0.95) 0%, rgba(16, 12, 5, 0.98) 100%);
+}
+.pokemon-card-container.Secret:hover .card-inner {
+    border-color: rgba(234, 179, 8, 0.9);
+    box-shadow: 
+        0 0 30px rgba(234, 179, 8, 0.55),
+        0 15px 35px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.Secret .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(234, 179, 8, 0) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(234, 179, 8, 0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.Secret:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 5. Illustration Rare Full-Bleed Artwork */
+.pokemon-card-container.Illustration .card-inner {
+    padding: 0 !important;
+    border: 1.5px solid rgba(20, 184, 166, 0.35);
+    background: #000;
+}
+.pokemon-card-container.Illustration .card-image-frame {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: var(--radius-lg);
+    margin: 0 !important;
+    position: absolute;
+    inset: 0;
+}
+.pokemon-card-container.Illustration .card-image-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1.02);
+    transition: transform 0.6s ease;
+}
+.pokemon-card-container.Illustration:hover .card-image-frame img {
+    transform: scale(1.08);
+}
+.pokemon-card-container.Illustration .card-header {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    background: rgba(10, 11, 16, 0.72) !important;
+    backdrop-filter: blur(8px);
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 10;
+    width: auto !important;
+}
+.pokemon-card-container.Illustration .card-body {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    background: rgba(10, 11, 16, 0.78) !important;
+    backdrop-filter: blur(8px);
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 10;
+    margin-top: 0 !important;
+}
+.pokemon-card-container.Illustration .card-notes-preview {
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+/* 6. Double Rare (Indigo glowing borders) */
+.pokemon-card-container.Double .card-inner {
+    border: 1.5px solid rgba(99, 102, 241, 0.45);
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 10px 25px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(22, 20, 48, 0.95) 0%, rgba(8, 8, 20, 0.98) 100%);
+}
+.pokemon-card-container.Double:hover .card-inner {
+    border-color: rgba(99, 102, 241, 0.85);
+    box-shadow: 
+        0 0 25px rgba(99, 102, 241, 0.45),
+        0 15px 35px rgba(0, 0, 0, 0.5);
+}
+
+/* 7. Special Illustration Rare (Gold & Teal border, full-bleed artwork, shifting sheen) */
+.pokemon-card-container.Special .card-inner {
+    padding: 0 !important;
+    border: 1.5px solid rgba(234, 179, 8, 0.6);
+    background: #000;
+    box-shadow: 0 0 20px rgba(20, 184, 166, 0.25), 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+.pokemon-card-container.Special .card-image-frame {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: var(--radius-lg);
+    margin: 0 !important;
+    position: absolute;
+    inset: 0;
+}
+.pokemon-card-container.Special .card-image-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1.02);
+    transition: transform 0.6s ease;
+}
+.pokemon-card-container.Special:hover .card-image-frame img {
+    transform: scale(1.08);
+}
+.pokemon-card-container.Special .card-header {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    background: rgba(10, 11, 16, 0.82) !important;
+    backdrop-filter: blur(8px);
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    z-index: 10;
+    width: auto !important;
+}
+.pokemon-card-container.Special .card-body {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    background: rgba(10, 11, 16, 0.85) !important;
+    backdrop-filter: blur(8px);
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    z-index: 10;
+    margin-top: 0 !important;
+}
+.pokemon-card-container.Special:hover .card-inner {
+    border-color: rgba(234, 179, 8, 0.95);
+    box-shadow: 0 0 35px rgba(20, 184, 166, 0.6), 0 15px 35px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.Special .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(234, 179, 8, 0) 0%, rgba(255, 255, 255, 0.15) 50%, rgba(20, 184, 166, 0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.Special:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 8. Hyper Rare (Luxury gold card backing, shimmering highlight) */
+.pokemon-card-container.Hyper .card-inner {
+    border: 2px solid rgba(234, 179, 8, 0.85);
+    box-shadow: 0 0 25px rgba(234, 179, 8, 0.35), 0 10px 25px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(56, 48, 16, 0.98) 0%, rgba(26, 22, 5, 0.99) 100%);
+}
+.pokemon-card-container.Hyper:hover .card-inner {
+    border-color: #facc15;
+    box-shadow: 0 0 40px rgba(234, 179, 8, 0.8), 0 15px 35px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.Hyper .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(125deg, rgba(255,255,255,0) 0%, rgba(255, 255, 255, 0.18) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.Hyper:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 9. Shiny Rare (Light blue/cyan sparkle backplate) */
+.pokemon-card-container.Shiny .card-inner {
+    border: 2px solid rgba(6, 182, 212, 0.7);
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3), 0 8px 20px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(8, 51, 68, 0.95) 0%, rgba(12, 74, 96, 0.98) 100%);
+}
+.pokemon-card-container.Shiny:hover .card-inner {
+    border-color: #22d3ee;
+    box-shadow: 0 0 35px rgba(6, 182, 212, 0.7), 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.Shiny .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(125deg, rgba(255,255,255,0) 0%, rgba(34, 211, 238, 0.12) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.Shiny:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 10. Ace Spec Rare (Intense magenta glowing theme) */
+.pokemon-card-container.Ace .card-inner {
+    border: 2px solid rgba(219, 39, 119, 0.95);
+    box-shadow: 0 0 25px rgba(219, 39, 119, 0.4), 0 10px 25px rgba(0, 0, 0, 0.45);
+    background: linear-gradient(135deg, rgba(76, 5, 41, 0.98) 0%, rgba(41, 2, 21, 0.99) 100%);
+}
+.pokemon-card-container.Ace:hover .card-inner {
+    border-color: #f472b6;
+    box-shadow: 0 0 40px rgba(219, 39, 119, 0.85), 0 15px 35px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.Ace .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0) 0%, rgba(244, 114, 182, 0.15) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.Ace:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 11. Mega Attack Rare (Fiery red/orange theme) */
+.pokemon-card-container.MegaAttack .card-inner {
+    border: 2px solid rgba(249, 115, 22, 0.85);
+    box-shadow: 0 0 22px rgba(249, 115, 22, 0.35), 0 10px 22px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(135deg, rgba(67, 20, 7, 0.98) 0%, rgba(30, 9, 3, 0.99) 100%);
+}
+.pokemon-card-container.MegaAttack:hover .card-inner {
+    border-color: #fb923c;
+    box-shadow: 0 0 35px rgba(249, 115, 22, 0.75), 0 14px 30px rgba(0, 0, 0, 0.5);
+}
+.pokemon-card-container.MegaAttack .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(125deg, rgba(255,255,255,0) 0%, rgba(251, 146, 60, 0.15) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.MegaAttack:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* 12. Mega Hyper Rare (Luxury gold with shifting rainbows) */
+.pokemon-card-container.MegaHyper .card-inner {
+    border: 2.5px solid rgba(234, 179, 8, 0.95);
+    box-shadow: 0 0 30px rgba(234, 179, 8, 0.45), 0 12px 30px rgba(0, 0, 0, 0.5);
+    background: linear-gradient(135deg, rgba(69, 56, 17, 0.98) 0%, rgba(28, 22, 5, 0.99) 100%);
+}
+.pokemon-card-container.MegaHyper:hover .card-inner {
+    border-color: #fef08a;
+    box-shadow: 0 0 45px rgba(234, 179, 8, 0.95), 0 18px 40px rgba(0, 0, 0, 0.6);
+}
+.pokemon-card-container.MegaHyper .card-inner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0) 0%, rgba(254, 240, 138, 0.25) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 200%;
+    background-position: 0% 0%;
+    transition: background-position 0.6s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+.pokemon-card-container.MegaHyper:hover .card-inner::after {
+    background-position: 100% 100%;
+}
+
+/* ==================== LOGIN OVERLAY ==================== */
+.login-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: 
+        radial-gradient(circle at 30% 30%, rgba(239, 68, 68, 0.12) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.10) 0%, transparent 50%),
+        rgba(8, 9, 16, 0.97);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    transition: opacity 0.4s ease;
+}
+
+.login-overlay.hidden {
+    display: none !important;
+}
+
+.login-card {
+    background: rgba(26, 29, 46, 0.85);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 24px;
+    padding: 48px 40px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow:
+        0 0 60px rgba(239, 68, 68, 0.08),
+        0 32px 64px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    animation: loginCardIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes loginCardIn {
+    from {
+        opacity: 0;
+        transform: translateY(24px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.login-logo {
+    text-align: center;
+    margin-bottom: 36px;
+    color: var(--color-primary);
+}
+
+.login-logo .pokeball-svg {
+    animation: rotate 8s linear infinite;
+    filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+}
+
+.login-logo h1 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin: 12px 0 6px;
+    letter-spacing: -0.5px;
+}
+
+.login-logo p {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.login-form .form-group {
+    margin-bottom: 18px;
+}
+
+.login-form .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.login-form .form-group input {
+    width: 100%;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 15px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.login-form .form-group input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.login-btn {
+    width: 100%;
+    padding: 15px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-top: 8px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.login-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.login-error {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-sm);
+    color: #fca5a5;
+    font-size: 13px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+}
+
+.login-footer {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 24px;
+}
+
+/* ==================== PROFILE FIREBASE STATUS ==================== */
+.profile-firebase-status {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.firebase-linked-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.firebase-linked-info strong {
+    color: var(--text-primary);
+}

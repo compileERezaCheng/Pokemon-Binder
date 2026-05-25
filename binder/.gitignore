@@ -1,0 +1,34 @@
+# Credentials & API Keys
+backend/credentials.json
+backend/firebase_secrets.py
+
+# Local Python caches
+__pycache__/
+backend/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# User Data & Local Cache
+data/pokemon_binder.csv
+data/binder_config.json
+data/pokemon_cache.json
+data/cover_image.png
+
+# Windows junk
+Thumbs.db
+Desktop.ini
+*.exe
+
+# Editor settings
+.vscode/
+.idea/
+.antigravitycli/
+
+# Project Context
+PROJECT_CONTEXT.md
