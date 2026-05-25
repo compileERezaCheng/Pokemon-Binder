@@ -1,13 +1,20 @@
 # --- SENSITIVE & PRIVATE FILES (STRICT) ---
-gradingAPP/
+**/secrets.properties
+**/local.properties
+**/google-services.json
 URGENT_UPDATES.md
 temp.md
-secrets.properties
 *.apk
 *.exe
 
 # --- PROJECT CONTEXT ---
-binder/PROJECT_CONTEXT.md
+**/PROJECT_CONTEXT.md
+
+# --- ANDROID APP (gradingAPP) ---
+gradingAPP/.gradle/
+gradingAPP/.kotlin/
+gradingAPP/app/build/
+gradingAPP/build/
 
 # --- PC APP (Python/Web) ---
 # Credentials & API Keys
