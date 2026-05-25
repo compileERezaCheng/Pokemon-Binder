@@ -11,7 +11,8 @@ data class Card(
     val type: String,
     val condition: String,
     val notes: String,
-    val dateAdded: String
+    val dateAdded: String,
+    val grade: Double = 0.0
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -23,6 +24,7 @@ data class Card(
             put("Condition", condition)
             put("Notes", notes)
             put("Date Added", dateAdded)
+            if (grade > 0.0) put("Grade", grade)
         }
     }
 
@@ -36,7 +38,8 @@ data class Card(
                 type = obj.optString("Type", "Normal"),
                 condition = obj.optString("Condition", "NM"),
                 notes = obj.optString("Notes", ""),
-                dateAdded = obj.optString("Date Added", "")
+                dateAdded = obj.optString("Date Added", ""),
+                grade = obj.optDouble("Grade", 0.0)
             )
         }
 

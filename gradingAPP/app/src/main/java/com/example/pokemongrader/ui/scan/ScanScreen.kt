@@ -12,17 +12,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +41,7 @@ import com.example.pokemongrader.BuildConfig
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
 import com.example.pokemongrader.data.PokeApiClient
+import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.capitalize
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.content
@@ -47,10 +52,6 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.draw.drawWithContent
 import org.json.JSONObject
 
 enum class ScanState {
@@ -94,9 +95,7 @@ fun ScanScreen(
 
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
-        onResult = { granted ->
-            hasCameraPermission = granted
-        }
+        onResult = { granted -> hasCameraPermission = granted }
     )
 
     LaunchedEffect(Unit) {
@@ -112,7 +111,7 @@ fun ScanScreen(
     var resolvedRarity by remember { mutableStateOf("Normal") }
     var resolvedGrade by remember { mutableStateOf(0.0) }
     var resolvedCritique by remember { mutableStateOf("") }
-    
+
     // Status text for loading screen
     var gradingStatus by remember { mutableStateOf("Analyzing Centering, Corners & Surface...") }
 
@@ -120,9 +119,10 @@ fun ScanScreen(
     var page by remember { mutableStateOf(repository.prefilledPage?.toString() ?: "1") }
     var slot by remember { mutableStateOf(repository.prefilledSlot?.toString() ?: "1") }
 
+    // All Pokémon names for autocomplete (fetched once)
+    var allPokemonNames by remember { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(Unit) {
-        repository.prefilledPage = null
-        repository.prefilledSlot = null
+        allPokemonNames = PokeApiClient.fetchAllNames()
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color(0xFF020617))) {
@@ -149,7 +149,6 @@ fun ScanScreen(
                         imageCapture = imageCapture,
                         onCapture = {
                             coroutineScope.launch {
-                                // Capture photo
                                 val bitmap = takePhoto(context, imageCapture)
                                 if (bitmap != null) {
                                     if (scanSide == ScanSide.FRONT) {
@@ -157,17 +156,15 @@ fun ScanScreen(
                                         scanSide = ScanSide.BACK
                                     } else {
                                         backBitmap = bitmap
-                                        // Both sides captured — enter grading
                                         gradingStatus = "Analyzing Centering, Corners & Surface..."
                                         scanState = ScanState.GRADING
-                                        
-                                        // Real Gemini Integration with retry logic
+
                                         try {
                                             val result = processWithGemini(
-                                                frontBitmap!!, 
+                                                frontBitmap!!,
                                                 backBitmap!!,
-                                                onRetry = { attempt, delayMs -> 
-                                                    gradingStatus = "Rate limit reached. Retrying in ${delayMs/1000}s... (Attempt $attempt)"
+                                                onRetry = { attempt, delayMs ->
+                                                    gradingStatus = "Rate limit reached. Retrying in ${delayMs / 1000}s... (Attempt $attempt)"
                                                 }
                                             )
                                             resolvedName = result.optString("name", "Unknown")
@@ -179,14 +176,14 @@ fun ScanScreen(
                                         } catch (e: Exception) {
                                             resolvedName = "Error"
                                             val fullMsg = e.toString()
-                                            resolvedCritique = if (fullMsg.contains("MissingFieldException")) {
-                                                "AI Error: Connection failed (SDK Bug). Please try again in 30 seconds."
-                                            } else if (fullMsg.contains("404")) {
-                                                "AI Error: Model not found. Updating configuration..."
-                                            } else if (fullMsg.contains("429") || fullMsg.contains("quota", ignoreCase = true)) {
-                                                "AI Error: Daily Quota reached. Please try scanning again in a few minutes or tomorrow."
-                                            } else {
-                                                "AI Error: ${e.message}"
+                                            resolvedCritique = when {
+                                                fullMsg.contains("MissingFieldException") ->
+                                                    "AI Error: Connection failed (SDK Bug). Please try again in 30 seconds."
+                                                fullMsg.contains("404") ->
+                                                    "AI Error: Model not found. Updating configuration..."
+                                                fullMsg.contains("429") || fullMsg.contains("quota", ignoreCase = true) ->
+                                                    "AI Error: Daily Quota reached. Please try scanning again in a few minutes or tomorrow."
+                                                else -> "AI Error: ${e.message}"
                                             }
                                             e.printStackTrace()
                                         }
@@ -218,9 +215,9 @@ fun ScanScreen(
                         page = page,
                         slot = slot,
                         isManual = scanState == ScanState.MANUAL,
-                        onNameChange = { 
+                        allPokemonNames = allPokemonNames,
+                        onNameChange = {
                             resolvedName = it
-                            // Try to update Dex number live if user is typing
                             if (it.length > 2) {
                                 coroutineScope.launch {
                                     val dex = PokeApiClient.fetchDexNumber(it)
@@ -245,16 +242,17 @@ fun ScanScreen(
                                     type = resolvedRarity,
                                     condition = "NM",
                                     notes = if (resolvedSet.isNotEmpty()) "[$resolvedSet] $resolvedCritique" else resolvedCritique,
-                                    dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                                    dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                                    grade = resolvedGrade
                                 )
                                 repository.addCard(card)
                                 onNavigateBack()
                             }
                         },
-                        onCancel = { 
+                        onCancel = {
                             frontBitmap = null
                             backBitmap = null
-                            scanState = ScanState.CAMERA 
+                            scanState = ScanState.CAMERA
                         }
                     )
                 }
@@ -266,7 +264,7 @@ fun ScanScreen(
 suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCapture): Bitmap? = withContext(Dispatchers.IO) {
     var bitmap: Bitmap? = null
     val latch = java.util.concurrent.CountDownLatch(1)
-    
+
     imageCapture.takePicture(
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageCapturedCallback() {
@@ -275,20 +273,19 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
                 val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
                 val originalBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                
-                // Rotation handling
+
                 val matrix = android.graphics.Matrix()
                 matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
                 val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                
-                val targetDimension = 1024f 
+
+                val targetDimension = 1024f
                 val scale = targetDimension / Math.max(rotatedBitmap.width, rotatedBitmap.height)
                 bitmap = if (scale < 1.0f) {
                     Bitmap.createScaledBitmap(rotatedBitmap, (rotatedBitmap.width * scale).toInt(), (rotatedBitmap.height * scale).toInt(), true)
                 } else {
                     rotatedBitmap
                 }
-                
+
                 image.close()
                 latch.countDown()
             }
@@ -299,7 +296,7 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
             }
         }
     )
-    
+
     latch.await()
     bitmap
 }
@@ -320,7 +317,7 @@ private fun decryptKey(encrypted: String): String {
 }
 
 suspend fun processWithGemini(
-    front: Bitmap, 
+    front: Bitmap,
     back: Bitmap,
     onRetry: (attempt: Int, delayMs: Long) -> Unit
 ): JSONObject = withContext(Dispatchers.IO) {
@@ -374,12 +371,12 @@ suspend fun processWithGemini(
                 text(prompt)
             }
 
-            var delayMs = 4000L 
+            var delayMs = 4000L
             for (attempt in 1..4) {
                 try {
                     val response = generativeModel.generateContent(inputContent)
                     val text = response.text?.trim() ?: throw Exception("Empty response from AI")
-                    
+
                     val jsonStr = if (text.contains("```json")) {
                         text.substringAfter("```json").substringBefore("```").trim()
                     } else if (text.contains("```")) {
@@ -387,7 +384,7 @@ suspend fun processWithGemini(
                     } else {
                         text
                     }
-                    
+
                     return@withContext JSONObject(jsonStr)
                 } catch (e: Exception) {
                     val msgText = e.toString()
@@ -400,7 +397,7 @@ suspend fun processWithGemini(
                         }
                     }
                     if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
-                        throw e 
+                        throw e
                     }
                     throw e
                 }
@@ -415,7 +412,7 @@ suspend fun processWithGemini(
             }
         }
     }
-    
+
     throw lastException ?: Exception("Unknown error during Gemini processing")
 }
 
@@ -443,7 +440,7 @@ fun CameraViewfinder(
                     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                     try {
                         cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture)      
+                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture)
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -460,29 +457,18 @@ fun CameraViewfinder(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Step indicator
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))        
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (side == ScanSide.BACK) Color.White else Color(0x66FFFFFF))
-                    )
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color.White))
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(if (side == ScanSide.BACK) Color.White else Color(0x66FFFFFF)))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (side == ScanSide.FRONT) "Scan Front Side" else "Scan Back Side",  
+                        text = if (side == ScanSide.FRONT) "Scan Front Side" else "Scan Back Side",
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
@@ -490,7 +476,6 @@ fun CameraViewfinder(
                 }
             }
 
-            // Frame
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.8f)
@@ -558,7 +543,7 @@ fun GradingLoadingScreen(status: String) {
                 .drawWithContent {
                     drawContent()
                     val brush = Brush.sweepGradient(
-                        colors = listOf(Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFEF4444)),    
+                        colors = listOf(Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFEF4444)),
                         center = center
                     )
                     drawCircle(brush = brush, radius = size.minDimension / 2, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 8.dp.toPx()))
@@ -570,22 +555,135 @@ fun GradingLoadingScreen(status: String) {
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Text(
-            "Gemini Card Critic",
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            status,
-            color = Color.Gray,
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp)
-        )
+        Text("Gemini Card Critic", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(status, color = Color.Gray, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Autocomplete dropdown field for Pokémon names
+// ─────────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PokemonNameField(
+    value: String,
+    allNames: List<String>,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val suggestions = remember(value, allNames) {
+        PokeApiClient.searchPokemon(value, allNames, limit = 6)
+    }
+    var expanded by remember { mutableStateOf(false) }
+
+    // Show dropdown only when there are suggestions and something has been typed
+    LaunchedEffect(suggestions) {
+        expanded = suggestions.isNotEmpty() && value.length >= 2
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
+            label = { Text("Pokémon Name", color = Color.Gray) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = Color(0xFFEF4444),
+                unfocusedBorderColor = Color(0xFF334155)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+        )
+
+        if (suggestions.isNotEmpty()) {
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = Color(0xFF0F172A)
+            ) {
+                suggestions.forEach { suggestion ->
+                    DropdownMenuItem(
+                        text = { Text(suggestion, color = Color.White) },
+                        onClick = {
+                            onValueChange(suggestion)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Simple number dropdown (for Page 1-20 and Slot 1-9)
+// ─────────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NumberDropdownField(
+    value: String,
+    label: String,
+    options: List<Int>,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label, color = Color.Gray) },
+            trailingIcon = {
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color.Gray)
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = Color(0xFFEF4444),
+                unfocusedBorderColor = Color(0xFF334155)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = Color(0xFF0F172A)
+        ) {
+            options.forEach { n ->
+                DropdownMenuItem(
+                    text = { Text(n.toString(), color = Color.White) },
+                    onClick = {
+                        onValueChange(n.toString())
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Confirmation / Manual Entry Screen
+// ─────────────────────────────────────────────────────────────
 @Composable
 fun ConfirmationScreen(
     name: String,
@@ -597,6 +695,7 @@ fun ConfirmationScreen(
     page: String,
     slot: String,
     isManual: Boolean,
+    allPokemonNames: List<String>,
     onNameChange: (String) -> Unit,
     onSetChange: (String) -> Unit,
     onDexChange: (String) -> Unit,
@@ -609,6 +708,7 @@ fun ConfirmationScreen(
     onCancel: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -616,43 +716,112 @@ fun ConfirmationScreen(
             .verticalScroll(scrollState)
     ) {
         Text(
-            text = if (isManual) "Manual Card Entry" else "AI Analysis Result", 
-            color = Color.White, 
-            fontSize = 24.sp, 
+            text = if (isManual) "Manual Card Entry" else "AI Analysis Result",
+            color = Color.White,
+            fontSize = 24.sp,
             fontWeight = FontWeight.Bold
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        if (!isManual) {
-            // Grade Highlight
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Brush.horizontalGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A))))  
-                    .padding(20.dp),
-                contentAlignment = Alignment.Center
+        // ── Pokémon image preview card ──────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(Brush.verticalGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A))))
+                .border(1.dp, Color(0xFF334155), RoundedCornerShape(20.dp))
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("CONDITION GRADE", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text(grade.toString(), color = Color(0xFF10B981), fontSize = 48.sp, fontWeight = FontWeight.Black)
-                    Text("Near Mint (AI Evaluated)", color = Color.LightGray, fontSize = 14.sp)
+                // Pokémon artwork — updates live as dex changes
+                Box(
+                    modifier = Modifier
+                        .size(90.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF0F172A)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (dex > 0) {
+                        val artUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$dex.png"
+                        AsyncImage(url = artUrl, contentDescription = name, modifier = Modifier.size(80.dp))
+                    } else {
+                        Text("?", color = Color(0xFF475569), fontSize = 32.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+
+                // Info column
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (name.isBlank()) "Unknown Pokémon" else name.capitalize(),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    if (set.isNotBlank()) {
+                        Text(text = set, color = Color(0xFF94A3B8), fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Rarity chip
+                        if (rarity.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF334155))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(text = rarity, color = Color.White, fontSize = 10.sp)
+                            }
+                        }
+                        // Grade chip (AI scans only)
+                        if (!isManual && grade > 0) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF1C1A00))
+                                    .border(1.dp, Color(0xFFEAB308), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = Color(0xFFEAB308),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = grade.let {
+                                        if (it == it.toLong().toDouble()) it.toLong().toString() else "%.1f".format(it)
+                                    },
+                                    color = Color(0xFFEAB308),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(text = " / 10", color = Color(0xFF92710A), fontSize = 10.sp)
+                            }
+                        }
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
-        // Editable Fields
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ── Editable fields ────────────────────────────────────
+
+        // Pokémon Name with autocomplete
+        PokemonNameField(
             value = if (isManual) name else name.capitalize(),
+            allNames = allPokemonNames,
             onValueChange = onNameChange,
-            label = { Text("Pokémon Name", color = Color.Gray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFFEF4444)
-            ),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -665,7 +834,8 @@ fun ConfirmationScreen(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFFEF4444)
+                focusedBorderColor = Color(0xFFEF4444),
+                unfocusedBorderColor = Color(0xFF334155)
             ),
             modifier = Modifier.fillMaxWidth()
         )
@@ -680,7 +850,8 @@ fun ConfirmationScreen(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFFEF4444)
+                    focusedBorderColor = Color(0xFFEF4444),
+                    unfocusedBorderColor = Color(0xFF334155)
                 ),
                 modifier = Modifier.weight(1f)
             )
@@ -692,17 +863,34 @@ fun ConfirmationScreen(
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Rarity", color = Color.Gray) },
-                    trailingIcon = { IconButton(onClick = { expandedRarity = true }) { Icon(Icons.Default.ArrowDropDown, null, tint = Color.Gray) } },
+                    trailingIcon = {
+                        IconButton(onClick = { expandedRarity = true }) {
+                            Icon(Icons.Default.ArrowDropDown, null, tint = Color.Gray)
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFFEF4444)
+                        focusedBorderColor = Color(0xFFEF4444),
+                        unfocusedBorderColor = Color(0xFF334155)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-                DropdownMenu(expanded = expandedRarity, onDismissRequest = { expandedRarity = false }, containerColor = Color(0xFF0F172A)) {
-                    listOf("Normal", "Rare", "Holofoil Rare", "Reverse Holo", "Ultra Rare", "Illustration Rare", "Special Illustration Rare", "Secret Rare", "Hyper Rare").forEach { r ->
-                        DropdownMenuItem(text = { Text(r, color = Color.White) }, onClick = { onRarityChange(r); expandedRarity = false })
+                DropdownMenu(
+                    expanded = expandedRarity,
+                    onDismissRequest = { expandedRarity = false },
+                    containerColor = Color(0xFF0F172A)
+                ) {
+                    listOf(
+                        "Mega Hyper Rare", "Hyper Rare", "Mega Attack Rare",
+                        "Special Illustration Rare", "Illustration Rare", "Ace Spec Rare",
+                        "Secret Rare", "Ultra Rare", "Double Rare", "Shiny Rare",
+                        "Reverse Holo", "Holofoil Rare", "Rare", "Normal"
+                    ).forEach { r ->
+                        DropdownMenuItem(
+                            text = { Text(r, color = Color.White) },
+                            onClick = { onRarityChange(r); expandedRarity = false }
+                        )
                     }
                 }
             }
@@ -710,28 +898,21 @@ fun ConfirmationScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        // Page (suggestions 1-20) + Slot (suggestions 1-9)
         Row {
-            OutlinedTextField(
+            NumberDropdownField(
                 value = page,
+                label = "Page",
+                options = (1..20).toList(),
                 onValueChange = onPageChange,
-                label = { Text("Page", color = Color.Gray) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFFEF4444)
-                ),
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(12.dp))
-            OutlinedTextField(
+            NumberDropdownField(
                 value = slot,
+                label = "Slot",
+                options = (1..9).toList(),
                 onValueChange = onSlotChange,
-                label = { Text("Slot", color = Color.Gray) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFFEF4444)
-                ),
                 modifier = Modifier.weight(1f)
             )
         }
@@ -745,7 +926,8 @@ fun ConfirmationScreen(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFFEF4444)
+                    focusedBorderColor = Color(0xFFEF4444),
+                    unfocusedBorderColor = Color(0xFF334155)
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -753,9 +935,14 @@ fun ConfirmationScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Text(if (isManual) "Notes" else "Critic Notes", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(
+            if (isManual) "Notes" else "Critic Notes",
+            color = Color(0xFF94A3B8),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
         Spacer(modifier = Modifier.height(8.dp))
-        
+
         OutlinedTextField(
             value = critique,
             onValueChange = onCritiqueChange,
@@ -763,7 +950,8 @@ fun ConfirmationScreen(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFFEF4444)
+                focusedBorderColor = Color(0xFFEF4444),
+                unfocusedBorderColor = Color(0xFF334155)
             )
         )
 
@@ -783,5 +971,8 @@ fun ConfirmationScreen(
         TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
             Text("CANCEL", color = Color.Gray)
         }
+
+        // Bottom padding so last field isn't hidden behind keyboard
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }

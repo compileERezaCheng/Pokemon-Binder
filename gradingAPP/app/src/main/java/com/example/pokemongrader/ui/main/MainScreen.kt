@@ -17,9 +17,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +43,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
@@ -157,7 +157,6 @@ fun RarityShimmerOverlay(rarity: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier.drawWithContent {
             drawContent()
-            // BlendMode.Screen requires API 29+; skip shimmer draw on older devices
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 val sweepWidth = size.width * 0.6f
                 val startX = size.width * shimmerOffset - sweepWidth / 2
@@ -236,12 +235,12 @@ fun ProfileImage(
             Box(modifier = modifier.background(Color.DarkGray))
         }
     } else {
-        // Default Pokémon Dex image
         val pUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$dex.png"
         AsyncImage(url = pUrl, contentDescription = "Profile", modifier = modifier)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     repository: DataRepository,
@@ -259,7 +258,12 @@ fun MainScreen(
     val profileImageBase64 by repository.profileImageBase64.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
-    var activeTab by remember { mutableStateOf("binder") } // "binder" or "collection"
+    var activeTab by remember { mutableStateOf("binder") }
+
+    // Fetch on screen entry so cards always load without logout/login
+    LaunchedEffect(Unit) {
+        repository.refreshAndFetch()
+    }
 
     // Page selection for Binder Grid
     var currentPage by remember { mutableStateOf(1) }
@@ -317,246 +321,254 @@ fun MainScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().background(Color(0xFF020617))) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    // Pull-to-refresh: wrap the entire screen content
+    PullToRefreshBox(
+        isRefreshing = isLoading,
+        onRefresh = { coroutineScope.launch { repository.refreshAndFetch() } },
+        modifier = modifier.fillMaxSize().background(Color(0xFF020617))
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
-            // Sync Profile Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Brush.horizontalGradient(listOf(Color(0x1F3B82F6), Color(0x1F1D4ED8))))
-                    .border(1.dp, Color(0x333B82F6), RoundedCornerShape(16.dp))
-                    .clickable { onNavigateToAccountSettings() }
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ProfileImage(
-                    source = profilePicSource,
-                    dex = profileFeaturedDex,
-                    url = profileImageUrl,
-                    base64Str = profileImageBase64,
+                // Profile Header (refresh button removed — pull-to-refresh is the gesture now)
+                Row(
                     modifier = Modifier
-                        .size(54.dp)
-                        .clip(CircleShape)
-                        .border(2.dp, Color(0xFF3B82F6), CircleShape)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = username.capitalize(),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Brush.horizontalGradient(listOf(Color(0x1F3B82F6), Color(0x1F1D4ED8))))
+                        .border(1.dp, Color(0x333B82F6), RoundedCornerShape(16.dp))
+                        .clickable { onNavigateToAccountSettings() }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ProfileImage(
+                        source = profilePicSource,
+                        dex = profileFeaturedDex,
+                        url = profileImageUrl,
+                        base64Str = profileImageBase64,
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .border(2.dp, Color(0xFF3B82F6), CircleShape)
                     )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = username.capitalize(),
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            text = "PokeBinder Champion",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp
+                        )
+                    }
+                    // Pull-down hint chip
                     Text(
-                        text = "PokeBinder Champion",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 12.sp
+                        text = "↓ pull to sync",
+                        color = Color(0xFF475569),
+                        fontSize = 10.sp
                     )
                 }
-                IconButton(onClick = { coroutineScope.launch { repository.fetchRemote() } }) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Sync",
-                        tint = Color.White
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Tab Selector
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF0F172A))
+                        .padding(4.dp)
+                ) {
+                    TabButton(
+                        text = "BINDER",
+                        isSelected = activeTab == "binder",
+                        onClick = { activeTab = "binder" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    TabButton(
+                        text = "COLLECTION",
+                        isSelected = activeTab == "collection",
+                        onClick = { activeTab = "collection" },
+                        modifier = Modifier.weight(1f)
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            // Tab Selector
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF0F172A))
-                    .padding(4.dp)
-            ) {
-                TabButton(
-                    text = "BINDER",
-                    isSelected = activeTab == "binder",
-                    onClick = { activeTab = "binder" },
-                    modifier = Modifier.weight(1f)
-                )
-                TabButton(
-                    text = "COLLECTION",
-                    isSelected = activeTab == "collection",
-                    onClick = { activeTab = "collection" },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (activeTab == "binder") {
-                // Binder Grid View
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold)
-                        Row {
-                            TextButton(onClick = { if (currentPage > 1) currentPage-- }) {
-                                Text("PREV", color = Color(0xFF3B82F6))
+                if (activeTab == "binder") {
+                    // Binder Grid View
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold)
+                            Row {
+                                TextButton(onClick = { if (currentPage > 1) currentPage-- }) {
+                                    Text("PREV", color = Color(0xFF3B82F6))
+                                }
+                                TextButton(onClick = { currentPage++ }) {
+                                    Text("NEXT", color = Color(0xFF3B82F6))
+                                }
                             }
-                            TextButton(onClick = { currentPage++ }) {
-                                Text("NEXT", color = Color(0xFF3B82F6))
+                        }
+
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(9) { index ->
+                                val slotIndex = index + 1
+                                val pocketCards = cards.filter { it.page == currentPage && it.slot == slotIndex }
+                                PocketCell(
+                                    slot = slotIndex,
+                                    cards = pocketCards,
+                                    onClick = {
+                                        if (pocketCards.isNotEmpty()) {
+                                            val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
+                                            onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded)
+                                        } else {
+                                            repository.prefilledPage = currentPage
+                                            repository.prefilledSlot = slotIndex
+                                            onNavigateToScan()
+                                        }
+                                    }
+                                )
                             }
                         }
                     }
+                } else {
+                    // Collection List Filters
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search by name or notes...", color = Color.DarkGray) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFF3B82F6)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        )
 
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(9) { index ->
-                            val slotIndex = index + 1
-                            val pocketCards = cards.filter { it.page == currentPage && it.slot == slotIndex }
-                            PocketCell(
-                                slot = slotIndex,
-                                cards = pocketCards,
-                                onClick = {
-                                    if (pocketCards.isNotEmpty()) {
-                                        val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
-                                        onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded)
-                                    } else {
-                                        repository.prefilledPage = currentPage
-                                        repository.prefilledSlot = slotIndex
-                                        onNavigateToScan()
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Rarity Filter — Fix: explicit contentColor = White so text isn't dimmed
+                            Box(modifier = Modifier.weight(1f)) {
+                                Button(
+                                    onClick = { expandedRarityFilter = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF1E293B),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(selectedRarityFilter, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
+                                }
+                                DropdownMenu(
+                                    expanded = expandedRarityFilter,
+                                    onDismissRequest = { expandedRarityFilter = false },
+                                    containerColor = Color(0xFF0F172A)
+                                ) {
+                                    listOf("All", "Normal", "Rare", "Holofoil Rare", "Reverse Holo", "Ultra Rare", "Illustration Rare", "Special Illustration Rare", "Secret Rare", "Hyper Rare").forEach { rarity ->
+                                        DropdownMenuItem(
+                                            text = { Text(rarity, color = Color.White) },
+                                            onClick = {
+                                                selectedRarityFilter = rarity
+                                                expandedRarityFilter = false
+                                            }
+                                        )
                                     }
                                 }
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Collection List Filters
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search by name or notes...", color = Color.DarkGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFF3B82F6)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Rarity Filter
-                        Box(modifier = Modifier.weight(1f)) {
-                            Button(
-                                onClick = { expandedRarityFilter = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(selectedRarityFilter, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
-                            DropdownMenu(
-                                expanded = expandedRarityFilter,
-                                onDismissRequest = { expandedRarityFilter = false },
-                                containerColor = Color(0xFF0F172A)
-                            ) {
-                                listOf("All", "Normal", "Rare", "Holofoil Rare", "Reverse Holo", "Ultra Rare", "Illustration Rare", "Special Illustration Rare", "Secret Rare", "Hyper Rare").forEach { rarity ->
-                                    DropdownMenuItem(
-                                        text = { Text(rarity, color = Color.White) },
-                                        onClick = {
-                                            selectedRarityFilter = rarity
-                                            expandedRarityFilter = false
-                                        }
-                                    )
+
+                            // Sort Option — Fix: explicit contentColor = White
+                            Box(modifier = Modifier.weight(1f)) {
+                                Button(
+                                    onClick = { expandedSortOption = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF1E293B),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Sort, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(selectedSortOption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
+                                }
+                                DropdownMenu(
+                                    expanded = expandedSortOption,
+                                    onDismissRequest = { expandedSortOption = false },
+                                    containerColor = Color(0xFF0F172A)
+                                ) {
+                                    listOf("Date Added", "Dex Number", "Name", "Rarity", "Location").forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option, color = Color.White) },
+                                            onClick = {
+                                                selectedSortOption = option
+                                                expandedSortOption = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
 
-                        // Sort Option
-                        Box(modifier = Modifier.weight(1f)) {
-                            Button(
-                                onClick = { expandedSortOption = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Icon(Icons.Default.Sort, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(selectedSortOption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            DropdownMenu(
-                                expanded = expandedSortOption,
-                                onDismissRequest = { expandedSortOption = false },
-                                containerColor = Color(0xFF0F172A)
-                            ) {
-                                listOf("Date Added", "Dex Number", "Name", "Rarity", "Location").forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option, color = Color.White) },
-                                        onClick = {
-                                            selectedSortOption = option
-                                            expandedSortOption = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Show Repeated Toggle
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = showRepeated,
-                            onCheckedChange = { showRepeated = it },
-                            colors = CheckboxDefaults.colors(checkedColor = Color(0xFF3B82F6))
-                        )
-                        Text("Show Repeated Cards", color = Color.LightGray, fontSize = 12.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LazyColumn(
-                        contentPadding = PaddingValues(bottom = 80.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredCards) { card ->
-                            CollectionRow(
-                                card = card,
-                                onClick = { onNavigateToCardDetails(card.page, card.slot, card.dateAdded) }
+                        // Show Repeated Toggle
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = showRepeated,
+                                onCheckedChange = { showRepeated = it },
+                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF3B82F6))
                             )
+                            Text("Show Repeated Cards", color = Color.LightGray, fontSize = 12.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        LazyColumn(
+                            contentPadding = PaddingValues(bottom = 80.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredCards) { card ->
+                                CollectionRow(
+                                    card = card,
+                                    onClick = { onNavigateToCardDetails(card.page, card.slot, card.dateAdded) }
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Floating Scan Button - Replaced with "+" Icon
-        FloatingActionButton(
-            onClick = onNavigateToScan,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
-            containerColor = Color(0xFFEF4444)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = "Add Card", tint = Color.White)
-        }
-
-        if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFFEF4444))
+            // Floating Scan Button
+            FloatingActionButton(
+                onClick = onNavigateToScan,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
+                containerColor = Color(0xFFEF4444)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Card", tint = Color.White)
+            }
         }
     }
 }
@@ -610,12 +622,11 @@ fun PocketCell(
             .padding(4.dp)
     ) {
         if (topCard != null) {
-            // Display Pokémon image
             val imageUrl = if (topCard.dexNumber > 0) {
                 "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${topCard.dexNumber}.png"
             } else ""
 
-            // Shimmer overlay for rarity effect
+            // Shimmer overlay
             RarityShimmerOverlay(
                 rarity = topCard.type,
                 modifier = Modifier.matchParentSize()
@@ -675,15 +686,41 @@ fun PocketCell(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
-                Text(
-                    text = topCard.name.capitalize(),
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
+                // Name + Grade Badge row at bottom
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Text(
+                        text = topCard.name.capitalize(),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.Center).padding(end = if (topCard.grade > 0) 22.dp else 0.dp)
+                    )
+
+                    // Grade badge — bottom-right corner
+                    if (topCard.grade > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF0F172A).copy(alpha = 0.9f))
+                                .border(1.dp, Color(0xFFEAB308), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = topCard.grade.let {
+                                    if (it == it.toLong().toDouble()) it.toLong().toString() else "%.1f".format(it)
+                                },
+                                color = Color(0xFFEAB308),
+                                fontSize = 6.sp,
+                                fontWeight = FontWeight.Black,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
             }
         } else {
             // Empty Cell state
@@ -783,10 +820,37 @@ fun CollectionRow(
                         color = Color.Gray,
                         fontSize = 11.sp
                     )
+                    // Show grade chip if present
+                    if (card.grade > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF1E293B))
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                tint = Color(0xFFEAB308),
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = card.grade.let {
+                                    if (it == it.toLong().toDouble()) it.toLong().toString() else "%.1f".format(it)
+                                },
+                                color = Color(0xFFEAB308),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }
-        // Shimmer overlay for rarity effect
+        // Shimmer overlay
         RarityShimmerOverlay(
             rarity = card.type,
             modifier = Modifier.matchParentSize()

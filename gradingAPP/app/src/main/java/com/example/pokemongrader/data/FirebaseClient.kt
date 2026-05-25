@@ -10,7 +10,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class AuthResult(val idToken: String, val uid: String)
+data class AuthResult(val idToken: String, val uid: String, val refreshToken: String = "")
 
 object FirebaseClient {
     private const val KEY = "PokeGraderSecureKey2026"
@@ -31,6 +31,27 @@ object FirebaseClient {
 
     private val API_KEY = decrypt(BuildConfig.ENC_FIREBASE_API_KEY)
     private val DB_URL = decrypt(BuildConfig.ENC_FIREBASE_DB_URL)
+
+    /** Silently exchange a refreshToken for a new idToken. Returns null on failure. */
+    suspend fun refreshIdToken(refreshToken: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("https://securetoken.googleapis.com/v1/token?key=$API_KEY")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            conn.doOutput = true
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            val body = "grant_type=refresh_token&refresh_token=$refreshToken"
+            conn.outputStream.write(body.toByteArray())
+            if (conn.responseCode != 200) return@withContext null
+            val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+            val json = JSONObject(res)
+            json.optString("id_token").ifEmpty { null }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     private fun handleHttpError(conn: HttpURLConnection): Nothing {
         val errorRes = try {
@@ -70,7 +91,7 @@ object FirebaseClient {
         
         val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
         val json = JSONObject(res)
-        AuthResult(json.getString("idToken"), json.getString("localId"))
+        AuthResult(json.getString("idToken"), json.getString("localId"), json.optString("refreshToken", ""))
     }
 
     suspend fun signUp(email: String, password: String): AuthResult = withContext(Dispatchers.IO) {
@@ -88,7 +109,7 @@ object FirebaseClient {
         
         val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
         val json = JSONObject(res)
-        AuthResult(json.getString("idToken"), json.getString("localId"))
+        AuthResult(json.getString("idToken"), json.getString("localId"), json.optString("refreshToken", ""))
     }
 
     suspend fun fetchCollection(uid: String, token: String): List<Card> = withContext(Dispatchers.IO) {

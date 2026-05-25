@@ -31,6 +31,7 @@ interface DataRepository {
     suspend fun addCard(card: Card): Boolean
     suspend fun removeCard(card: Card): Boolean
     suspend fun fetchRemote(): Boolean
+    suspend fun refreshAndFetch(): Boolean
     suspend fun updateProfile(username: String, source: String, dex: Int, url: String, base64: String): Boolean
     fun logout()
 }
@@ -85,18 +86,38 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         _profileImageUrl.value = prefs.getString("profile_image_url", "") ?: ""
         _profileImageBase64.value = prefs.getString("profile_image_base64", "") ?: ""
 
-        val token = prefs.getString("token", "")
-        if (!token.isNullOrEmpty()) {
+        val refreshToken = prefs.getString("refresh_token", "")
+        if (!refreshToken.isNullOrEmpty()) {
             _isLoggedIn.value = true
-            scope.launch { fetchRemote() }
+            // Silently refresh the idToken then fetch — fixes the "must logout/login" bug
+            scope.launch { refreshAndFetch() }
         }
+    }
+
+    /**
+     * Silently exchanges the stored refreshToken for a fresh idToken, then fetches
+     * the remote collection. Falls back to stored idToken if refresh fails.
+     */
+    override suspend fun refreshAndFetch(): Boolean {
+        val storedRefreshToken = prefs.getString("refresh_token", "") ?: ""
+        if (storedRefreshToken.isNotEmpty()) {
+            val newIdToken = FirebaseClient.refreshIdToken(storedRefreshToken)
+            if (newIdToken != null) {
+                prefs.edit().putString("token", newIdToken).apply()
+            }
+        }
+        return fetchRemote()
     }
 
     override suspend fun login(email: String, password: String): Boolean {
         _isLoading.value = true
         return try {
             val result = FirebaseClient.signIn(email, password)
-            prefs.edit().putString("token", result.idToken).putString("uid", result.uid).apply()
+            prefs.edit()
+                .putString("token", result.idToken)
+                .putString("uid", result.uid)
+                .putString("refresh_token", result.refreshToken)
+                .apply()
             _isLoggedIn.value = true
             fetchRemote()
             true
@@ -112,7 +133,11 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         _isLoading.value = true
         return try {
             val result = FirebaseClient.signUp(email, password)
-            prefs.edit().putString("token", result.idToken).putString("uid", result.uid).apply()
+            prefs.edit()
+                .putString("token", result.idToken)
+                .putString("uid", result.uid)
+                .putString("refresh_token", result.refreshToken)
+                .apply()
             _isLoggedIn.value = true
             fetchRemote()
             true
