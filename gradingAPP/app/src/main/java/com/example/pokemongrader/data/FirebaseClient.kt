@@ -185,5 +185,42 @@ object FirebaseClient {
         conn.responseCode
         uConn.responseCode
     }
+
+    suspend fun submitDatasetSample(
+        uid: String,
+        token: String,
+        frontBase64: String,
+        backBase64: String,
+        name: String,
+        set: String,
+        rarity: String,
+        grade: Double,
+        critique: String
+    ): Unit = withContext(Dispatchers.IO) {
+        try {
+            val sampleId = System.currentTimeMillis().toString()
+            val url = URL("$DB_URL/grading_dataset/$sampleId.json?auth=$token")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "PUT"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            
+            val sample = JSONObject()
+                .put("uid", uid)
+                .put("timestamp", sampleId)
+                .put("front_image", frontBase64)
+                .put("back_image", backBase64)
+                .put("name", name)
+                .put("set", set)
+                .put("rarity", rarity)
+                .put("grade", grade)
+                .put("critique", critique)
+                
+            conn.outputStream.write(sample.toString().toByteArray())
+            conn.responseCode
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 }
 

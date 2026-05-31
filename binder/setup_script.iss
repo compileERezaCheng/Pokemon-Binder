@@ -4,7 +4,7 @@
 [Setup]
 AppId={{D3F9B7E1-8C5A-4A1B-B0E3-5B2D1C5E6F7A}}
 AppName=Pokemon Binder Manager
-AppVersion=1.5.0-DEV
+AppVersion=1.5.1
 DefaultDirName={autopf}\PokemonBinder
 DefaultGroupName=Pokemon Binder Manager
 AllowNoIcons=yes

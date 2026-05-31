@@ -49,15 +49,35 @@ private class FakeDataRepository : DataRepository {
   private val _errorMessage = MutableStateFlow<String?>(null)
   override val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
-  override val apiKey: String = "fake_key"
-  override val dbUrl: String = "fake_db"
-  override val email: String = "collector@example.com"
-  override val uid: String = "fake_uid"
-  override val token: String = "fake_token"
+  override val username = MutableStateFlow("Dr4g0n").asStateFlow()
+  override val profilePicSource = MutableStateFlow("pokemon").asStateFlow()
+  override val profileFeaturedDex = MutableStateFlow(25).asStateFlow()
+  override val profileImageUrl = MutableStateFlow("").asStateFlow()
+  override val profileImageBase64 = MutableStateFlow("").asStateFlow()
 
-  override suspend fun login(email: String, password: String, apiKey: String, dbUrl: String): Boolean = true
-  override suspend fun register(email: String, password: String, apiKey: String, dbUrl: String): Boolean = true
+  override var prefilledPage: Int? = null
+  override var prefilledSlot: Int? = null
+
+  override suspend fun submitDatasetSample(
+    front: android.graphics.Bitmap?,
+    back: android.graphics.Bitmap?,
+    name: String,
+    set: String,
+    rarity: String,
+    grade: Double,
+    critique: String
+  ): Boolean = true
+
+  override suspend fun login(email: String, password: String): Boolean = true
+  override suspend fun register(email: String, password: String): Boolean = true
   override suspend fun addCard(card: Card): Boolean = true
+  override suspend fun removeCard(card: Card): Boolean = true
   override suspend fun fetchRemote(): Boolean = true
+  override suspend fun refreshAndFetch(): Boolean = true
+  override suspend fun updateProfile(username: String, source: String, dex: Int, url: String, base64: String): Boolean = true
   override fun logout() {}
+
+  override val customSets = MutableStateFlow<Map<String, String>>(emptyMap()).asStateFlow()
+  override suspend fun addCustomSet(code: String, name: String) {}
+  override suspend fun removeCustomSet(code: String) {}
 }

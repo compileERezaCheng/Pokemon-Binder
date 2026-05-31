@@ -26,6 +26,16 @@ interface DataRepository {
     var prefilledPage: Int?
     var prefilledSlot: Int?
     
+    suspend fun submitDatasetSample(
+        front: android.graphics.Bitmap?,
+        back: android.graphics.Bitmap?,
+        name: String,
+        set: String,
+        rarity: String,
+        grade: Double,
+        critique: String
+    ): Boolean
+    
     suspend fun login(email: String, password: String): Boolean
     suspend fun register(email: String, password: String): Boolean
     suspend fun addCard(card: Card): Boolean
@@ -278,5 +288,38 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         _profileFeaturedDex.value = 25
         _profileImageUrl.value = ""
         _profileImageBase64.value = ""
+    }
+
+    override suspend fun submitDatasetSample(
+        front: android.graphics.Bitmap?,
+        back: android.graphics.Bitmap?,
+        name: String,
+        set: String,
+        rarity: String,
+        grade: Double,
+        critique: String
+    ): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val uid = prefs.getString("uid", "") ?: ""
+            val token = prefs.getString("token", "") ?: ""
+            if (uid.isEmpty() || token.isEmpty()) return@withContext false
+            
+            val frontBase64 = front?.let { bitmapToBase64(it) } ?: ""
+            val backBase64 = back?.let { bitmapToBase64(it) } ?: ""
+            
+            FirebaseClient.submitDatasetSample(
+                uid, token, frontBase64, backBase64, name, set, rarity, grade, critique
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun bitmapToBase64(bitmap: android.graphics.Bitmap): String {
+        val outputStream = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, outputStream)
+        val byteArray = outputStream.toByteArray()
+        return android.util.Base64.encodeToString(byteArray, android.util.Base64.DEFAULT)
     }
 }

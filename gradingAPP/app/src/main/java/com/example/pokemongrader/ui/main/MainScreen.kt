@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FilterList
@@ -403,27 +405,40 @@ fun MainScreen(
                     // Binder Grid View
                     Column {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold)
-                            Row {
-                                TextButton(onClick = { if (currentPage > 1) currentPage-- }) {
-                                    Text("PREV", color = Color(0xFF3B82F6))
-                                }
-                                TextButton(onClick = { currentPage++ }) {
-                                    Text("NEXT", color = Color(0xFF3B82F6))
-                                }
-                            }
+                            Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         }
+
+                        var offsetX by remember { mutableStateOf(0f) }
 
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
                             contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectHorizontalDragGestures(
+                                        onDragEnd = {
+                                            if (offsetX < -150f) {
+                                                // Swipe Left -> Next Page
+                                                currentPage++
+                                            } else if (offsetX > 150f) {
+                                                // Swipe Right -> Prev Page
+                                                if (currentPage > 1) currentPage--
+                                            }
+                                            offsetX = 0f
+                                        },
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            offsetX += dragAmount
+                                        }
+                                    )
+                                }
                         ) {
                             items(9) { index ->
                                 val slotIndex = index + 1
@@ -563,7 +578,11 @@ fun MainScreen(
 
             // Floating Scan Button
             FloatingActionButton(
-                onClick = onNavigateToScan,
+                onClick = {
+                    repository.prefilledPage = null
+                    repository.prefilledSlot = null
+                    onNavigateToScan()
+                },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
                 containerColor = Color(0xFFEF4444)
             ) {

@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -53,6 +55,7 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONObject
+
 
 enum class ScanState {
     CAMERA,
@@ -106,7 +109,6 @@ fun ScanScreen(
 
     // Result Data
     var resolvedName by remember { mutableStateOf("") }
-    var resolvedSet by remember { mutableStateOf("") }
     var resolvedDex by remember { mutableStateOf(0) }
     var resolvedRarity by remember { mutableStateOf("Normal") }
     var resolvedGrade by remember { mutableStateOf(0.0) }
@@ -115,9 +117,34 @@ fun ScanScreen(
     // Status text for loading screen
     var gradingStatus by remember { mutableStateOf("Analyzing Centering, Corners & Surface...") }
 
+    val cards by repository.cards.collectAsState()
+
     // Coordinates
-    var page by remember { mutableStateOf(repository.prefilledPage?.toString() ?: "1") }
-    var slot by remember { mutableStateOf(repository.prefilledSlot?.toString() ?: "1") }
+    var page by remember { mutableStateOf("1") }
+    var slot by remember { mutableStateOf("1") }
+
+    LaunchedEffect(repository.prefilledPage, repository.prefilledSlot, cards) {
+        val prefP = repository.prefilledPage
+        val prefS = repository.prefilledSlot
+        if (prefP != null && prefS != null) {
+            page = prefP.toString()
+            slot = prefS.toString()
+        } else {
+            // Find first empty pocket (Page 1..20, Slot 1..9)
+            var found = false
+            for (p in 1..20) {
+                for (s in 1..9) {
+                    if (cards.none { it.page == p && it.slot == s }) {
+                        page = p.toString()
+                        slot = s.toString()
+                        found = true
+                        break
+                    }
+                }
+                if (found) break
+            }
+        }
+    }
 
     // All Pokémon names for autocomplete (fetched once)
     var allPokemonNames by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -148,6 +175,12 @@ fun ScanScreen(
                         side = scanSide,
                         imageCapture = imageCapture,
                         onCapture = {
+                            resolvedName = ""
+                            resolvedRarity = "Normal"
+                            resolvedGrade = 0.0
+                            resolvedCritique = ""
+                            resolvedDex = 0
+
                             coroutineScope.launch {
                                 val bitmap = takePhoto(context, imageCapture)
                                 if (bitmap != null) {
@@ -156,23 +189,25 @@ fun ScanScreen(
                                         scanSide = ScanSide.BACK
                                     } else {
                                         backBitmap = bitmap
-                                        gradingStatus = "Analyzing Centering, Corners & Surface..."
+                                        gradingStatus = "Analyzing Card Details..."
                                         scanState = ScanState.GRADING
 
                                         try {
-                                            val result = processWithGemini(
+                                            val result = identifyCardWithGemini(
                                                 frontBitmap!!,
-                                                backBitmap!!,
                                                 onRetry = { attempt, delayMs ->
                                                     gradingStatus = "Rate limit reached. Retrying in ${delayMs / 1000}s... (Attempt $attempt)"
                                                 }
                                             )
                                             resolvedName = result.optString("name", "Unknown")
-                                            resolvedSet = result.optString("set", "Unknown")
                                             resolvedRarity = result.optString("rarity", "Common")
-                                            resolvedGrade = result.optDouble("grade", 0.0)
-                                            resolvedCritique = result.optString("critique", "No critique provided.")
-                                            resolvedDex = PokeApiClient.fetchDexNumber(resolvedName)
+                                            resolvedGrade = 0.0
+                                            resolvedCritique = ""
+                                            resolvedDex = result.optInt("dex_number", 0)
+                                            if (resolvedDex > 0) {
+                                                page = (((resolvedDex - 1) / 9) + 1).toString()
+                                                slot = (((resolvedDex - 1) % 9) + 1).toString()
+                                            }
                                         } catch (e: Exception) {
                                             resolvedName = "Error"
                                             val fullMsg = e.toString()
@@ -207,7 +242,6 @@ fun ScanScreen(
                 ScanState.CONFIRM, ScanState.MANUAL -> {
                     ConfirmationScreen(
                         name = resolvedName,
-                        set = resolvedSet,
                         dex = resolvedDex,
                         rarity = resolvedRarity,
                         grade = resolvedGrade,
@@ -216,17 +250,29 @@ fun ScanScreen(
                         slot = slot,
                         isManual = scanState == ScanState.MANUAL,
                         allPokemonNames = allPokemonNames,
+                        frontBitmap = frontBitmap,
+                        backBitmap = backBitmap,
                         onNameChange = {
                             resolvedName = it
                             if (it.length > 2) {
                                 coroutineScope.launch {
                                     val dex = PokeApiClient.fetchDexNumber(it)
-                                    if (dex > 0) resolvedDex = dex
+                                    if (dex > 0) {
+                                        resolvedDex = dex
+                                        page = (((dex - 1) / 9) + 1).toString()
+                                        slot = (((dex - 1) % 9) + 1).toString()
+                                    }
                                 }
                             }
                         },
-                        onSetChange = { resolvedSet = it },
-                        onDexChange = { resolvedDex = it.toIntOrNull() ?: 0 },
+                        onDexChange = {
+                            val dex = it.toIntOrNull() ?: 0
+                            resolvedDex = dex
+                            if (dex > 0) {
+                                page = (((dex - 1) / 9) + 1).toString()
+                                slot = (((dex - 1) % 9) + 1).toString()
+                            }
+                        },
                         onRarityChange = { resolvedRarity = it },
                         onGradeChange = { resolvedGrade = it.toDoubleOrNull() ?: 0.0 },
                         onCritiqueChange = { resolvedCritique = it },
@@ -241,10 +287,21 @@ fun ScanScreen(
                                     name = resolvedName.trim().lowercase(),
                                     type = resolvedRarity,
                                     condition = "NM",
-                                    notes = if (resolvedSet.isNotEmpty()) "[$resolvedSet] $resolvedCritique" else resolvedCritique,
+                                    notes = resolvedCritique,
                                     dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                                     grade = resolvedGrade
                                 )
+                                if (scanState == ScanState.CONFIRM) {
+                                    repository.submitDatasetSample(
+                                        front = frontBitmap,
+                                        back = backBitmap,
+                                        name = resolvedName.trim(),
+                                        set = "",
+                                        rarity = resolvedRarity,
+                                        grade = resolvedGrade,
+                                        critique = resolvedCritique
+                                    )
+                                }
                                 repository.addCard(card)
                                 onNavigateBack()
                             }
@@ -278,12 +335,23 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
                 matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
                 val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
 
-                val targetDimension = 1024f
-                val scale = targetDimension / Math.max(rotatedBitmap.width, rotatedBitmap.height)
+                // Crop to visual guide box (95% width, 0.714 aspect ratio, centered vertically)
+                val bw = rotatedBitmap.width
+                val bh = rotatedBitmap.height
+                val cropLeft = (bw * 0.025f).toInt()
+                val cropWidth = (bw * 0.95f).toInt()
+                val cropHeight = (cropWidth / 0.714f).toInt()
+                val cropTop = ((bh - cropHeight) / 2).coerceAtLeast(0)
+                val finalCropHeight = cropHeight.coerceAtMost(bh - cropTop)
+                
+                val croppedBitmap = Bitmap.createBitmap(rotatedBitmap, cropLeft, cropTop, cropWidth, finalCropHeight)
+
+                val targetDimension = 2048f
+                val scale = targetDimension / Math.max(croppedBitmap.width, croppedBitmap.height)
                 bitmap = if (scale < 1.0f) {
-                    Bitmap.createScaledBitmap(rotatedBitmap, (rotatedBitmap.width * scale).toInt(), (rotatedBitmap.height * scale).toInt(), true)
+                    Bitmap.createScaledBitmap(croppedBitmap, (croppedBitmap.width * scale).toInt(), (croppedBitmap.height * scale).toInt(), true)
                 } else {
-                    rotatedBitmap
+                    croppedBitmap
                 }
 
                 image.close()
@@ -316,9 +384,8 @@ private fun decryptKey(encrypted: String): String {
     }
 }
 
-suspend fun processWithGemini(
+suspend fun identifyCardWithGemini(
     front: Bitmap,
-    back: Bitmap,
     onRetry: (attempt: Int, delayMs: Long) -> Unit
 ): JSONObject = withContext(Dispatchers.IO) {
     val apiKey = decryptKey(BuildConfig.ENC_GEMINI_API_KEY)
@@ -341,15 +408,100 @@ suspend fun processWithGemini(
             )
 
             val prompt = """
-                Analyze these two images of a physical Pokémon card (Front and Back).
+                Analyze the front image of this physical Pokémon card.
+                Identify the standard English name of the Pokémon, its national Pokedex number, and its rarity.
                 
-                1. PRIMARY TASK - IDENTIFICATION:
-                - Identify the Pokémon name (top of card).
-                - ZOOM IN and read the bottom-left and bottom-right corners very carefully.
-                - Look for the COLLECTOR NUMBER (e.g., 045/198, 123/203) and the SET SYMBOL.
-                - Identify the EXACT EXPANSION SET based on the symbol and collector number. 
+                Return ONLY a JSON object:
+                {
+                  "name": "Pokémon Name",
+                  "dex_number": 25,
+                  "rarity": "Rarity Tier"
+                }
+            """.trimIndent()
+
+            val inputContent = content {
+                image(front)
+                text(prompt)
+            }
+
+            var delayMs = 4000L
+            for (attempt in 1..4) {
+                try {
+                    val response = generativeModel.generateContent(inputContent)
+                    val text = response.text?.trim() ?: throw Exception("Empty response from AI")
+
+                    val jsonStr = if (text.contains("```json")) {
+                        text.substringAfter("```json").substringBefore("```").trim()
+                    } else if (text.contains("```")) {
+                        text.substringAfter("```").substringBeforeLast("```").trim()
+                    } else {
+                        text
+                    }
+
+                    val json = JSONObject(jsonStr)
+                    val rName = json.optString("name", "").trim()
+                    if (rName.isEmpty() || rName.equals("Unknown", ignoreCase = true)) {
+                        throw Exception("Model $modelName returned Unknown name.")
+                    }
+                    return@withContext json
+                } catch (e: Exception) {
+                    val msgText = e.toString()
+                    if (msgText.contains("429") || msgText.contains("Too Many Requests", ignoreCase = true) || msgText.contains("quota", ignoreCase = true)) {
+                        if (attempt < 4) {
+                            onRetry(attempt, delayMs)
+                            delay(delayMs)
+                            delayMs += 4000L
+                            continue
+                        }
+                    }
+                    if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
+                        throw e
+                    }
+                    throw e
+                }
+            }
+        } catch (e: Exception) {
+            lastException = e
+            val msgText = e.toString()
+            if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
+                continue
+            } else {
+                throw e
+            }
+        }
+    }
+
+    throw lastException ?: Exception("Unknown error during Gemini processing")
+}
+
+suspend fun gradeCardWithGemini(
+    front: Bitmap,
+    back: Bitmap,
+    onRetry: (attempt: Int, delayMs: Long) -> Unit = { _, _ -> }
+): JSONObject = withContext(Dispatchers.IO) {
+    val apiKey = decryptKey(BuildConfig.ENC_GEMINI_API_KEY)
+    if (apiKey.isEmpty() || apiKey == "PLACEHOLDER_ENC_GEMINI_API_KEY") {
+        throw Exception("Gemini API Key missing or invalid.")
+    }
+
+    val modelVariations = listOf(
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash"
+    )
+    var lastException: Exception? = null
+
+    for (modelName in modelVariations) {
+        try {
+            val generativeModel = GenerativeModel(
+                modelName = modelName,
+                apiKey = apiKey
+            )
+
+            val prompt = """
+                Analyze these two images of a physical Pokémon card (Front and Back) to evaluate its physical condition and grade it.
                 
-                2. SECONDARY TASK - GRADING (Scale 1.0 - 10.0):
+                Grading Criteria (Scale 1.0 - 10.0):
                 - Centering: Analyze border width consistency.
                 - Corners: Check for rounding and white spots.
                 - Edges: Check for silvering, nicks, or wear.
@@ -357,11 +509,8 @@ suspend fun processWithGemini(
                 
                 Return ONLY a JSON object:
                 {
-                  "name": "Pokémon Name",
-                  "set": "Exact Expansion Name",
-                  "rarity": "Rarity Tier",
                   "grade": 9.2,
-                  "critique": "[C: 0.0, Cr: 0.0, E: 0.0, S: 0.0] Reason for grade..."
+                  "critique": "[C: 9.5, Cr: 9.0, E: 9.0, S: 9.5] Border centering is slightly off on the left..."
                 }
             """.trimIndent()
 
@@ -385,7 +534,8 @@ suspend fun processWithGemini(
                         text
                     }
 
-                    return@withContext JSONObject(jsonStr)
+                    val json = JSONObject(jsonStr)
+                    return@withContext json
                 } catch (e: Exception) {
                     val msgText = e.toString()
                     if (msgText.contains("429") || msgText.contains("Too Many Requests", ignoreCase = true) || msgText.contains("quota", ignoreCase = true)) {
@@ -478,7 +628,7 @@ fun CameraViewfinder(
 
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.8f)
+                    .fillMaxWidth(0.95f)
                     .aspectRatio(0.714f)
                     .border(2.dp, Color.White, RoundedCornerShape(16.dp))
             )
@@ -687,7 +837,6 @@ fun NumberDropdownField(
 @Composable
 fun ConfirmationScreen(
     name: String,
-    set: String,
     dex: Int,
     rarity: String,
     grade: Double,
@@ -696,8 +845,9 @@ fun ConfirmationScreen(
     slot: String,
     isManual: Boolean,
     allPokemonNames: List<String>,
+    frontBitmap: Bitmap?,
+    backBitmap: Bitmap?,
     onNameChange: (String) -> Unit,
-    onSetChange: (String) -> Unit,
     onDexChange: (String) -> Unit,
     onRarityChange: (String) -> Unit,
     onGradeChange: (String) -> Unit,
@@ -708,6 +858,8 @@ fun ConfirmationScreen(
     onCancel: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    var isGrading by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -761,9 +913,6 @@ fun ConfirmationScreen(
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
-                    if (set.isNotBlank()) {
-                        Text(text = set, color = Color(0xFF94A3B8), fontSize = 12.sp)
-                    }
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -806,9 +955,52 @@ fun ConfirmationScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(text = " / 10", color = Color(0xFF92710A), fontSize = 10.sp)
-                            }
                         }
                     }
+                }
+            }
+        }
+    }
+
+        if (!isManual && (frontBitmap != null || backBitmap != null)) {
+            Spacer(modifier = Modifier.height(16.dp))
+            if (grade == 0.0 && !isGrading) {
+                Button(
+                    onClick = {
+                        if (frontBitmap != null && backBitmap != null) {
+                            isGrading = true
+                            coroutineScope.launch {
+                                try {
+                                    val result = gradeCardWithGemini(frontBitmap, backBitmap)
+                                    val finalGrade = result.optDouble("grade", 0.0)
+                                    val finalCritique = result.optString("critique", "")
+                                    onGradeChange(finalGrade.toString())
+                                    onCritiqueChange(finalCritique)
+                                } catch (e: Exception) {
+                                    onCritiqueChange("Grading failed: ${e.message}")
+                                } finally {
+                                    isGrading = false
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEAB308)),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = Color.Black)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("GRADE THIS CARD WITH AI (BETA)", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            } else if (isGrading) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(color = Color(0xFFEAB308), modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("AI is grading card condition (Beta)...", color = Color.LightGray, fontSize = 14.sp)
                 }
             }
         }
@@ -822,21 +1014,6 @@ fun ConfirmationScreen(
             value = if (isManual) name else name.capitalize(),
             allNames = allPokemonNames,
             onValueChange = onNameChange,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = set,
-            onValueChange = onSetChange,
-            label = { Text("Expansion Set", color = Color.Gray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFFEF4444),
-                unfocusedBorderColor = Color(0xFF334155)
-            ),
             modifier = Modifier.fillMaxWidth()
         )
 
