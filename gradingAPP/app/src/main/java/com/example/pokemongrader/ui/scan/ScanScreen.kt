@@ -32,7 +32,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -51,7 +51,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONObject
@@ -59,6 +58,7 @@ import org.json.JSONObject
 
 enum class ScanState {
     CAMERA,
+    REVIEW,
     GRADING,
     CONFIRM,
     MANUAL
@@ -66,6 +66,34 @@ enum class ScanState {
 
 enum class ScanSide {
     FRONT, BACK
+}
+
+data class ConditionEstimate(val grade: Double?, val evidence: String)
+
+fun parseConditionEstimate(json: JSONObject): ConditionEstimate {
+    val assessable = json.getBoolean("assessable")
+    if (!assessable) {
+        require(json.has("grade") && json.isNull("grade")) { "Unevaluable response must have a null grade" }
+        val reason = json.getString("reason").trim()
+        require(reason.isNotEmpty()) { "Missing reason" }
+        return ConditionEstimate(null, "Not assessable: $reason")
+    }
+    val rawGrade = json.get("grade")
+    require(rawGrade is Number) { "Missing numeric grade" }
+    val grade = rawGrade.toDouble()
+    require(grade.isFinite() && grade in 1.0..10.0) { "Grade outside 1–10" }
+    val criteria = json.getJSONObject("criteria")
+    val evidence = listOf("centering", "corners", "edges", "surface").joinToString("; ") { name ->
+        val item = criteria.getJSONObject(name)
+        val rawScore = item.get("score")
+        require(rawScore is Number) { "Missing $name score" }
+        val score = rawScore.toDouble()
+        require(score.isFinite() && score in 1.0..10.0) { "$name outside 1–10" }
+        val observation = item.getString("evidence").trim()
+        require(observation.isNotEmpty()) { "Missing $name evidence" }
+        "$name $score: $observation"
+    }
+    return ConditionEstimate(grade, evidence)
 }
 
 @Composable
@@ -76,7 +104,6 @@ fun ScanScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     var scanState by remember { mutableStateOf(ScanState.CAMERA) }
     var scanSide by remember { mutableStateOf(ScanSide.FRONT) }
@@ -113,6 +140,8 @@ fun ScanScreen(
     var resolvedRarity by remember { mutableStateOf("Normal") }
     var resolvedGrade by remember { mutableStateOf(0.0) }
     var resolvedCritique by remember { mutableStateOf("") }
+    var saveError by remember { mutableStateOf("") }
+    var captureError by remember { mutableStateOf("") }
 
     // Status text for loading screen
     var gradingStatus by remember { mutableStateOf("Analyzing Centering, Corners & Surface...") }
@@ -174,7 +203,9 @@ fun ScanScreen(
                     CameraViewfinder(
                         side = scanSide,
                         imageCapture = imageCapture,
+                        captureError = captureError,
                         onCapture = {
+                            captureError = ""
                             resolvedName = ""
                             resolvedRarity = "Normal"
                             resolvedGrade = 0.0
@@ -186,47 +217,11 @@ fun ScanScreen(
                                 if (bitmap != null) {
                                     if (scanSide == ScanSide.FRONT) {
                                         frontBitmap = bitmap
-                                        scanSide = ScanSide.BACK
                                     } else {
                                         backBitmap = bitmap
-                                        gradingStatus = "Analyzing Card Details..."
-                                        scanState = ScanState.GRADING
-
-                                        try {
-                                            val result = identifyCardWithGemini(
-                                                frontBitmap!!,
-                                                onRetry = { attempt, delayMs ->
-                                                    gradingStatus = "Rate limit reached. Retrying in ${delayMs / 1000}s... (Attempt $attempt)"
-                                                }
-                                            )
-                                            resolvedName = result.optString("name", "Unknown")
-                                            resolvedRarity = result.optString("rarity", "Common")
-                                            resolvedGrade = 0.0
-                                            resolvedCritique = ""
-                                            resolvedDex = result.optInt("dex_number", 0)
-                                            if (resolvedDex > 0) {
-                                                page = (((resolvedDex - 1) / 9) + 1).toString()
-                                                slot = (((resolvedDex - 1) % 9) + 1).toString()
-                                            }
-                                        } catch (e: Exception) {
-                                            resolvedName = "Error"
-                                            val fullMsg = e.toString()
-                                            resolvedCritique = when {
-                                                fullMsg.contains("MissingFieldException") ->
-                                                    "AI Error: Connection failed (SDK Bug). Please try again in 30 seconds."
-                                                fullMsg.contains("404") ->
-                                                    "AI Error: Model not found. Updating configuration..."
-                                                fullMsg.contains("429") || fullMsg.contains("quota", ignoreCase = true) ->
-                                                    "AI Error: Daily Quota reached. Please try scanning again in a few minutes or tomorrow."
-                                                else -> "AI Error: ${e.message}"
-                                            }
-                                            e.printStackTrace()
-                                        }
-
-                                        scanState = ScanState.CONFIRM
-                                        scanSide = ScanSide.FRONT
                                     }
-                                }
+                                    scanState = ScanState.REVIEW
+                                } else captureError = "Photo failed. Try again."
                             }
                         },
                         onManualEntry = { scanState = ScanState.MANUAL },
@@ -235,6 +230,49 @@ fun ScanScreen(
                             onNavigateBack()
                         }
                     )
+                }
+                ScanState.REVIEW -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Text("Review ${if (scanSide == ScanSide.FRONT) "front" else "back"}: check all corners, focus and reflections", color = Color.White)
+                        val photo = if (scanSide == ScanSide.FRONT) frontBitmap else backBitmap
+                        photo?.let { Image(it.asImageBitmap(), contentDescription = "Captured ${scanSide.name.lowercase()} photo", modifier = Modifier.weight(1f).fillMaxWidth()) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(onClick = {
+                                if (scanSide == ScanSide.FRONT) frontBitmap = null else backBitmap = null
+                                scanState = ScanState.CAMERA
+                            }) { Text("Retake photo") }
+                            Button(onClick = {
+                                if (scanSide == ScanSide.FRONT) {
+                                    scanSide = ScanSide.BACK
+                                    scanState = ScanState.CAMERA
+                                } else {
+                                    scanState = ScanState.GRADING
+                                    gradingStatus = "Identifying the card from its front..."
+                                    coroutineScope.launch {
+                                        try {
+                                            val result = identifyCardWithGemini(frontBitmap!!) { attempt, delayMs ->
+                                                gradingStatus = "Quota limit. Retry $attempt in ${delayMs / 1000}s..."
+                                            }
+                                            resolvedName = result.getString("name")
+                                            resolvedRarity = result.getString("rarity")
+                                            resolvedDex = result.getInt("dex_number")
+                                            if (resolvedDex > 0 && repository.prefilledPage == null) {
+                                                page = (((resolvedDex - 1) / 9) + 1).toString()
+                                                slot = (((resolvedDex - 1) % 9) + 1).toString()
+                                            }
+                                        } catch (e: Exception) {
+                                            resolvedCritique = "Identification unavailable: ${e.message}. Correct the fields before saving."
+                                        }
+                                        scanState = ScanState.CONFIRM
+                                    }
+                                }
+                            }) { Text("Use photo") }
+                        }
+                    }
                 }
                 ScanState.GRADING -> {
                     GradingLoadingScreen(status = gradingStatus)
@@ -252,6 +290,7 @@ fun ScanScreen(
                         allPokemonNames = allPokemonNames,
                         frontBitmap = frontBitmap,
                         backBitmap = backBitmap,
+                        saveError = saveError,
                         onNameChange = {
                             resolvedName = it
                             if (it.length > 2) {
@@ -259,8 +298,10 @@ fun ScanScreen(
                                     val dex = PokeApiClient.fetchDexNumber(it)
                                     if (dex > 0) {
                                         resolvedDex = dex
-                                        page = (((dex - 1) / 9) + 1).toString()
-                                        slot = (((dex - 1) % 9) + 1).toString()
+                                        if (repository.prefilledPage == null) {
+                                            page = (((dex - 1) / 9) + 1).toString()
+                                            slot = (((dex - 1) % 9) + 1).toString()
+                                        }
                                     }
                                 }
                             }
@@ -268,7 +309,7 @@ fun ScanScreen(
                         onDexChange = {
                             val dex = it.toIntOrNull() ?: 0
                             resolvedDex = dex
-                            if (dex > 0) {
+                            if (dex > 0 && repository.prefilledPage == null) {
                                 page = (((dex - 1) / 9) + 1).toString()
                                 slot = (((dex - 1) % 9) + 1).toString()
                             }
@@ -280,30 +321,33 @@ fun ScanScreen(
                         onSlotChange = { slot = it },
                         onConfirm = {
                             coroutineScope.launch {
+                                val finalPage = page.toIntOrNull()
+                                val finalSlot = slot.toIntOrNull()
+                                if (resolvedName.isBlank() || finalPage == null || finalPage < 1 || finalSlot == null || finalSlot !in 1..9 || (resolvedGrade != 0.0 && (!resolvedGrade.isFinite() || resolvedGrade !in 1.0..10.0))) {
+                                    saveError = "Enter a name, valid page and slot before saving."
+                                    return@launch
+                                }
                                 val card = Card(
-                                    page = page.toIntOrNull() ?: 1,
-                                    slot = slot.toIntOrNull() ?: 1,
+                                    page = finalPage,
+                                    slot = finalSlot,
                                     dexNumber = resolvedDex,
                                     name = resolvedName.trim().lowercase(),
                                     type = resolvedRarity,
-                                    condition = "NM",
+                                    // ponytail: coarse mapping until reference cards can calibrate category thresholds.
+                                    condition = when {
+                                        resolvedGrade == 0.0 -> "UNASSESSED"
+                                        resolvedGrade >= 8.0 -> "NM"
+                                        resolvedGrade >= 6.0 -> "LP"
+                                        resolvedGrade >= 4.0 -> "MP"
+                                        else -> "HP"
+                                    },
                                     notes = resolvedCritique,
                                     dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                                     grade = resolvedGrade
                                 )
-                                if (scanState == ScanState.CONFIRM) {
-                                    repository.submitDatasetSample(
-                                        front = frontBitmap,
-                                        back = backBitmap,
-                                        name = resolvedName.trim(),
-                                        set = "",
-                                        rarity = resolvedRarity,
-                                        grade = resolvedGrade,
-                                        critique = resolvedCritique
-                                    )
-                                }
-                                repository.addCard(card)
-                                onNavigateBack()
+                                // No training-photo upload without an explicit opt-in flow.
+                                if (repository.addCard(card)) onNavigateBack()
+                                else saveError = "Could not save the card. Check the connection and retry; photos are still here."
                             }
                         },
                         onCancel = {
@@ -326,36 +370,22 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                val originalBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-
-                val matrix = android.graphics.Matrix()
-                matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-
-                // Crop to visual guide box (95% width, 0.714 aspect ratio, centered vertically)
-                val bw = rotatedBitmap.width
-                val bh = rotatedBitmap.height
-                val cropLeft = (bw * 0.025f).toInt()
-                val cropWidth = (bw * 0.95f).toInt()
-                val cropHeight = (cropWidth / 0.714f).toInt()
-                val cropTop = ((bh - cropHeight) / 2).coerceAtLeast(0)
-                val finalCropHeight = cropHeight.coerceAtMost(bh - cropTop)
-                
-                val croppedBitmap = Bitmap.createBitmap(rotatedBitmap, cropLeft, cropTop, cropWidth, finalCropHeight)
-
-                val targetDimension = 2048f
-                val scale = targetDimension / Math.max(croppedBitmap.width, croppedBitmap.height)
-                bitmap = if (scale < 1.0f) {
-                    Bitmap.createScaledBitmap(croppedBitmap, (croppedBitmap.width * scale).toInt(), (croppedBitmap.height * scale).toInt(), true)
-                } else {
-                    croppedBitmap
+                try {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    val matrix = android.graphics.Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
+                    val oriented = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+                    // Preserve the whole card and enough detail for review; very large photos are capped for memory.
+                    val scale = 4096f / maxOf(oriented.width, oriented.height)
+                    bitmap = if (scale < 1f) Bitmap.createScaledBitmap(oriented, (oriented.width * scale).toInt(), (oriented.height * scale).toInt(), true) else oriented
+                } catch (_: Exception) {
+                    bitmap = null
+                } finally {
+                    image.close()
+                    latch.countDown()
                 }
-
-                image.close()
-                latch.countDown()
             }
 
             override fun onError(exception: ImageCaptureException) {
@@ -393,11 +423,7 @@ suspend fun identifyCardWithGemini(
         throw Exception("Gemini API Key missing or invalid.")
     }
 
-    val modelVariations = listOf(
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash"
-    )
+    val modelVariations = listOf("gemini-3.5-flash-lite")
     var lastException: Exception? = null
 
     for (modelName in modelVariations) {
@@ -409,7 +435,8 @@ suspend fun identifyCardWithGemini(
 
             val prompt = """
                 Analyze the front image of this physical Pokémon card.
-                Identify the standard English name of the Pokémon, its national Pokedex number, and its rarity.
+                Identify only the standard English Pokémon name, national Pokedex number, and visible rarity.
+                Do not infer the expansion set. If identification is uncertain, return an empty name.
                 
                 Return ONLY a JSON object:
                 {
@@ -439,10 +466,11 @@ suspend fun identifyCardWithGemini(
                     }
 
                     val json = JSONObject(jsonStr)
-                    val rName = json.optString("name", "").trim()
+                    val rName = json.getString("name").trim()
                     if (rName.isEmpty() || rName.equals("Unknown", ignoreCase = true)) {
                         throw Exception("Model $modelName returned Unknown name.")
                     }
+                    require(json.getInt("dex_number") > 0 && json.getString("rarity").isNotBlank()) { "Incomplete identification" }
                     return@withContext json
                 } catch (e: Exception) {
                     val msgText = e.toString()
@@ -484,11 +512,7 @@ suspend fun gradeCardWithGemini(
         throw Exception("Gemini API Key missing or invalid.")
     }
 
-    val modelVariations = listOf(
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash"
-    )
+    val modelVariations = listOf("gemini-3.5-flash-lite")
     var lastException: Exception? = null
 
     for (modelName in modelVariations) {
@@ -499,19 +523,14 @@ suspend fun gradeCardWithGemini(
             )
 
             val prompt = """
-                Analyze these two images of a physical Pokémon card (Front and Back) to evaluate its physical condition and grade it.
-                
-                Grading Criteria (Scale 1.0 - 10.0):
-                - Centering: Analyze border width consistency.
-                - Corners: Check for rounding and white spots.
-                - Edges: Check for silvering, nicks, or wear.
-                - Surface: Check for scratches, print lines, or stains.
-                
-                Return ONLY a JSON object:
-                {
-                  "grade": 9.2,
-                  "critique": "[C: 9.5, Cr: 9.0, E: 9.0, S: 9.5] Border centering is slightly off on the left..."
-                }
+                Estimate physical condition from these front and back photos. This is not professional certification.
+                Look for observable evidence only: border centering, corner wear, edge wear, and surface defects.
+                If either photo is cropped, blurred, obscured by glare, or too small to assess any criterion,
+                return {"assessable":false,"grade":null,"reason":"short observable reason"}.
+                Otherwise return ONLY a JSON object: assessable=true; numeric grade from 1 to 10;
+                criteria with centering, corners, edges and surface objects. Each object needs a numeric
+                score from 1 to 10 and a short evidence string describing a visible observation.
+                If a defect cannot be observed reliably, use the non-assessable form. Do not invent defects or scores.
             """.trimIndent()
 
             val inputContent = content {
@@ -535,6 +554,7 @@ suspend fun gradeCardWithGemini(
                     }
 
                     val json = JSONObject(jsonStr)
+                    parseConditionEstimate(json)
                     return@withContext json
                 } catch (e: Exception) {
                     val msgText = e.toString()
@@ -570,6 +590,7 @@ suspend fun gradeCardWithGemini(
 fun CameraViewfinder(
     side: ScanSide,
     imageCapture: ImageCapture,
+    captureError: String,
     onCapture: () -> Unit,
     onManualEntry: () -> Unit,
     onCancel: () -> Unit
@@ -665,6 +686,7 @@ fun CameraViewfinder(
                     Icon(Icons.Default.Edit, contentDescription = "Manual Entry", tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
+            if (captureError.isNotEmpty()) Text(captureError, color = Color(0xFFEF4444))
         }
     }
 }
@@ -847,6 +869,7 @@ fun ConfirmationScreen(
     allPokemonNames: List<String>,
     frontBitmap: Bitmap?,
     backBitmap: Bitmap?,
+    saveError: String,
     onNameChange: (String) -> Unit,
     onDexChange: (String) -> Unit,
     onRarityChange: (String) -> Unit,
@@ -868,7 +891,7 @@ fun ConfirmationScreen(
             .verticalScroll(scrollState)
     ) {
         Text(
-            text = if (isManual) "Manual Card Entry" else "AI Analysis Result",
+            text = if (isManual) "Manual Card Entry" else "Card identification",
             color = Color.White,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
@@ -962,7 +985,7 @@ fun ConfirmationScreen(
         }
     }
 
-        if (!isManual && (frontBitmap != null || backBitmap != null)) {
+                if (!isManual && (frontBitmap != null || backBitmap != null)) {
             Spacer(modifier = Modifier.height(16.dp))
             if (grade == 0.0 && !isGrading) {
                 Button(
@@ -971,13 +994,12 @@ fun ConfirmationScreen(
                             isGrading = true
                             coroutineScope.launch {
                                 try {
-                                    val result = gradeCardWithGemini(frontBitmap, backBitmap)
-                                    val finalGrade = result.optDouble("grade", 0.0)
-                                    val finalCritique = result.optString("critique", "")
-                                    onGradeChange(finalGrade.toString())
-                                    onCritiqueChange(finalCritique)
+                                    val estimate = parseConditionEstimate(gradeCardWithGemini(frontBitmap, backBitmap))
+                                    onGradeChange(estimate.grade?.toString() ?: "")
+                                    onCritiqueChange(estimate.evidence)
                                 } catch (e: Exception) {
-                                    onCritiqueChange("Grading failed: ${e.message}")
+                                    onGradeChange("")
+                                    onCritiqueChange("Condition estimate unavailable: ${e.message}")
                                 } finally {
                                     isGrading = false
                                 }
@@ -990,7 +1012,7 @@ fun ConfirmationScreen(
                 ) {
                     Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = Color.Black)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("GRADE THIS CARD WITH AI (BETA)", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("ESTIMATE CONDITION (BETA)", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             } else if (isGrading) {
                 Row(
@@ -1000,7 +1022,7 @@ fun ConfirmationScreen(
                 ) {
                     CircularProgressIndicator(color = Color(0xFFEAB308), modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("AI is grading card condition (Beta)...", color = Color.LightGray, fontSize = 14.sp)
+                    Text("Estimating condition from both photos...", color = Color.LightGray, fontSize = 14.sp)
                 }
             }
         }
@@ -1113,7 +1135,7 @@ fun ConfirmationScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            if (isManual) "Notes" else "Critic Notes",
+            if (isManual) "Notes" else "Condition observations",
             color = Color(0xFF94A3B8),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold
@@ -1133,6 +1155,8 @@ fun ConfirmationScreen(
         )
 
         Spacer(modifier = Modifier.height(32.dp))
+
+        if (saveError.isNotEmpty()) Text(saveError, color = Color(0xFFEF4444))
 
         Button(
             onClick = onConfirm,

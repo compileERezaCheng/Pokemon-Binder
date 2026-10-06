@@ -5,9 +5,6 @@ import os
 import sys
 import urllib.parse
 from datetime import datetime
-import time
-
-LAST_HEARTBEAT = time.time()
 
 # Add the current directory to sys.path so we can import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -38,13 +35,44 @@ else:
 
 DATA_DIR = pokemon_binder.DATA_DIR
 PORT = 8080
+INSTANCE_TOKEN = os.environ.get('POKEMON_BINDER_INSTANCE', '')
+PUBLIC_SETTINGS = {
+    'rows', 'cols', 'mode', 'gsheet_enabled', 'gsheet_name', 'firebase_enabled',
+    'firebase_email', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
+    'cover_color', 'cover_featured_dex', 'cover_source', 'cover_image_url',
+    'cover_image_path', 'profile_picture_source', 'profile_featured_dex',
+    'profile_image_url', 'profile_image_path',
+}
+
+def public_settings(config):
+    return {key: config[key] for key in PUBLIC_SETTINGS if key in config}
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def allowed_request(self, write=False):
+        host = self.headers.get('Host', '')
+        origin = self.headers.get('Origin')
+        if host != f'127.0.0.1:{PORT}' or self.client_address[0] != '127.0.0.1':
+            self.send_error(403, 'Local access only')
+            return False
+        if origin and origin != f'http://127.0.0.1:{PORT}':
+            self.send_error(403, 'Unexpected origin')
+            return False
+        if write and self.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none'):
+            self.send_error(403, 'Unexpected origin')
+            return False
+        bodyless = {'/api/heartbeat', '/api/shutdown', '/api/sync', '/api/firebase/logout'}
+        if write and self.path not in bodyless and self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+            self.send_error(415, 'JSON required')
+            return False
+        return True
+
     def end_headers(self):
         # Call superclass end_headers directly. Caching headers are now managed on a per-response basis.
         super().end_headers()
 
     def do_GET(self):
+        if not self.allowed_request():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
@@ -83,7 +111,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(pokemon_binder.load_collection(), cache_age=0)
             
         elif path == '/api/settings':
-            self.send_json(pokemon_binder.load_config(), cache_age=0)
+            self.send_json(public_settings(pokemon_binder.load_config()), cache_age=0)
+        elif path == '/api/instance':
+            self.send_json({'instance': INSTANCE_TOKEN}, cache_age=0)
             
         elif path == '/api/pokemon-db':
             # Pokémon Dex Species Database is 50KB and static, cache for 1 day
@@ -97,6 +127,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "File Not Found")
 
     def do_POST(self):
+        if not self.allowed_request(write=True):
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         
@@ -246,7 +278,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 pokemon_binder.push_profile_to_firebase(config)
             except Exception:
                 pass
-        self.send_json({"success": True, "config": config})
+        self.send_json({"success": True, "config": public_settings(config)})
 
 
     def handle_upload_cover_image(self, data):
@@ -273,7 +305,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             config["cover_image_path"] = "cover_image.png"
             pokemon_binder.save_config(config)
             
-            self.send_json({"success": True, "config": config})
+            self.send_json({"success": True, "config": public_settings(config)})
         except Exception as e:
             self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
 
@@ -306,7 +338,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
             
-            self.send_json({"success": True, "config": config})
+            self.send_json({"success": True, "config": public_settings(config)})
         except Exception as e:
             self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
 
@@ -330,7 +362,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "success": True, 
                 "message": f"Login successful! {sync_msg}",
-                "config": pokemon_binder.load_config() # Reload to get updated user_id/token
+                "config": public_settings(pokemon_binder.load_config())
             })
         else:
             self.send_json({"success": False, "error": msg}, status=401)
@@ -347,9 +379,12 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
             return
             
+        dex_value = data.get("dex_id", 0)
+        if isinstance(dex_value, dict):
+            dex_value = dex_value.get("id", 0)
         try:
-            dex_id = int(data.get("dex_id", 0))
-        except ValueError:
+            dex_id = int(dex_value)
+        except (TypeError, ValueError):
             dex_id = 0
             
         try:
@@ -506,171 +541,31 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_shutdown(self):
         import threading
-        import time
-        
-        def shutdown_process(server):
-            time.sleep(0.5)  # Wait 500ms to allow response to send fully
-            server.shutdown()
-            server.server_close()
-            os._exit(0)
-            
         self.send_json({"success": True, "message": "Server is shutting down..."})
-        threading.Thread(target=shutdown_process, args=(self.server,)).start()
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     def handle_heartbeat(self):
-        global LAST_HEARTBEAT
-        LAST_HEARTBEAT = time.time()
         self.send_json({"success": True})
-
-def monitor_heartbeat(server):
-    # 15-second grace period at startup to allow Edge/Chrome app to launch and load JavaScript
-    time.sleep(15)
-    while True:
-        time.sleep(2)
-        if time.time() - LAST_HEARTBEAT > 12:
-            # No heartbeat received for 12 seconds, assume app was closed
-            print("[*] No active app connection detected. Automatically shutting down server...")
-            server.shutdown()
-            server.server_close()
-            os._exit(0)
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     # This enables handling multiple requests in parallel without freezing the connection
     allow_reuse_address = True
 
-def launch_browser():
-    import subprocess
-    import time
-    import http.client
-    import shutil
-
-    # 1. Wait for server to be ready to avoid "Connection Refused" errors
-    max_retries = 20
-    ready = False
-    for _ in range(max_retries):
-        try:
-            conn = http.client.HTTPConnection("localhost", PORT)
-            conn.request("GET", "/")
-            res = conn.getresponse()
-            if res.status == 200:
-                ready = True
-                break
-        except Exception:
-            pass
-        time.sleep(0.5)
-
-    if not ready:
-        return
-
-    # 2. Find Microsoft Edge for "App Mode" to make it look like a standalone app
-    edge_cmd = "msedge.exe"
-    edge_path = shutil.which(edge_cmd)
-    
-    if not edge_path:
-        # Check standard Windows installation paths if not in system PATH
-        possible_paths = [
-            os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'Microsoft\\Edge\\Application\\msedge.exe'),
-            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'Microsoft\\Edge\\Application\\msedge.exe'),
-            os.path.expanduser('~\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe')
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                edge_path = path
-                break
-
-    # 3. Launch in App Mode if Edge is found
-    if edge_path:
-        try:
-            # --app flag removes address bar/tabs for the native app feel
-            subprocess.Popen([edge_path, f'--app=http://localhost:{PORT}', '--window-size=1320,880'], 
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-        except Exception:
-            pass
-
-    # Final Fallback: Open in the user's default browser if Edge App Mode fails
-    try:
-        import webbrowser
-        webbrowser.open(f'http://localhost:{PORT}')
-    except Exception:
-        pass
-
-def check_setup_shortcut():
-    if not getattr(sys, 'frozen', False):
-        return
-        
-    import ctypes
-    import subprocess
-    from ctypes import wintypes
-    
-    # Robustly find the Desktop path (works for OneDrive and localized names like "Ambiente de Trabalho")
-    CSIDL_DESKTOP = 0x0000
-    SHGFP_TYPE_CURRENT = 0
-    buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-    ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_DESKTOP, 0, SHGFP_TYPE_CURRENT, buf)
-    desktop = buf.value
-    
-    shortcut_path = os.path.join(desktop, 'Pokemon Binder.lnk')
-    
-    if not os.path.exists(shortcut_path):
-        MB_YESNO = 0x04
-        MB_ICONQUESTION = 0x20
-        IDYES = 6
-        
-        res = ctypes.windll.user32.MessageBoxW(0, 
-            "Do you want to create a Desktop shortcut for Pokémon Binder Manager?", 
-            "Pokémon Binder Setup", 
-            MB_YESNO | MB_ICONQUESTION)
-            
-        if res == IDYES:
-            try:
-                target = sys.executable
-                work_dir = os.path.dirname(sys.executable)
-                # Use the icon embedded in the EXE itself
-                ico = target
-                
-                # Using powershell to create shortcut safely
-                ps_cmd = f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");$s.TargetPath="{target}";$s.WorkingDirectory="{work_dir}";$s.IconLocation="{ico}";$s.Save()'
-                subprocess.run(['powershell', '-Command', ps_cmd], capture_output=True)
-            except Exception:
-                pass
-
 def main():
     try:
-        # Make sure cache is loaded once on server startup to speed up response
-        print("[*] Pre-loading PokeAPI local cache...")
-        pokemon_binder.load_pokemon_database()
-        
-        # Download default icon if missing
-        try:
-            pokemon_binder.download_default_icon()
-        except Exception:
-            pass
-
-        # Launch browser in a background thread
-        import threading
-        browser_thread = threading.Thread(target=launch_browser)
-        browser_thread.daemon = True
-        browser_thread.start()
-        
-        server_address = ('', PORT)
+        server_address = ('127.0.0.1', PORT)
         httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
-        
-        # Heartbeat monitor
-        monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
-        monitor_thread.daemon = True
-        monitor_thread.start()
-        
+
         print(f"\n=======================================================")
         print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
-        print(f"   Running on http://localhost:{PORT}")
+        print(f"   Running on http://127.0.0.1:{PORT}")
         print(f"   Press Ctrl+C in this window to stop the server")
         print(f"=======================================================\n")
         
         httpd.serve_forever()
     except Exception as e:
         import traceback
-        with open("startup_error.log", "w") as f:
+        with open(STARTUP_LOG, "w") as f:
             f.write(str(e) + "\n")
             f.write(traceback.format_exc())
         sys.exit(1)

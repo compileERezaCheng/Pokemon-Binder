@@ -31,6 +31,8 @@ binder/backend/firebase_secrets.py
 # PyInstaller
 binder/build/
 binder/dist/
+binder/src/bin/
+binder/src/obj/
 **/*.spec
 
 # User Data & Local Cache

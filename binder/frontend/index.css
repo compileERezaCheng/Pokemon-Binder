@@ -2161,21 +2161,25 @@ button, input, select {
     background: linear-gradient(180deg, #1e213a 0%, #121321 100%);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
+.pokemon-card-container.Reverse .card-inner {
+    isolation: isolate;
+}
 .pokemon-card-container.Reverse .card-inner::after {
     content: "";
     position: absolute;
     inset: 0;
     background: linear-gradient(135deg, 
-        rgba(255, 255, 255, 0) 30%, 
-        rgba(255, 255, 255, 0.06) 40%, 
-        rgba(255, 255, 255, 0.18) 50%, 
-        rgba(255, 255, 255, 0.06) 60%, 
+        rgba(255, 255, 255, 0) 30%,
+        rgba(167, 139, 250, 0.14) 40%,
+        rgba(255, 255, 255, 0.3) 50%,
+        rgba(34, 211, 238, 0.14) 60%,
         rgba(255, 255, 255, 0) 70%
     );
     background-size: 200% 200%;
     background-repeat: no-repeat;
     background-position: 200% 200%;
     z-index: 3; /* Draw on top of card body background but below the image frame */
+    mix-blend-mode: screen;
     pointer-events: none;
     animation: reverseHoloSweep 7s ease-in-out infinite;
 }

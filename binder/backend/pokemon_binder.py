@@ -576,11 +576,13 @@ def make_firebase_request(url, method="GET", data=None, token=None):
         try:
             err_msg = e.read().decode("utf-8")
             err_data = json.loads(err_msg)
-            return None, f"HTTP Error {e.code}: {err_data.get('error', err_msg)}"
+            error = err_data.get('error', {})
+            message = error.get('message', 'Request rejected') if isinstance(error, dict) else 'Request rejected'
+            return None, f"HTTP Error {e.code}: {message}"
         except Exception:
             return None, f"HTTP Error {e.code}: {e.reason}"
-    except Exception as e:
-        return None, f"Connection error: {e}"
+    except Exception:
+        return None, "Connection error while contacting Firebase."
 
 def get_firebase_oauth_token():
     try:

@@ -17,7 +17,7 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body class="dark-theme">
-    <!-- FIREBASE LOGIN OVERLAY (shown when not authenticated) -->
+    <!-- Firebase sign-in is optional; the local binder works without an account. -->
     <div id="login-overlay" class="login-overlay hidden">
         <div class="login-card">
             <div class="login-logo">
@@ -28,7 +28,7 @@
                     <circle cx="50" cy="50" r="6" fill="currentColor"/>
                 </svg>
                 <h1>PokeBinder</h1>
-                <p>Sign in to access your collection</p>
+                <p>Sign in only if you want to sync with Firebase.</p>
             </div>
             <div id="login-error" class="login-error hidden"></div>
             <div class="login-form">
@@ -44,8 +44,9 @@
                     <span id="login-btn-text">Sign In</span>
                     <span id="login-btn-spinner" class="hidden">Connecting...</span>
                 </button>
+                <button class="btn-secondary" onclick="continueLocalOnly()">Continue with local collection</button>
             </div>
-            <p class="login-footer">Your card data stays safe and synced via Firebase.</p>
+            <p class="login-footer">Your cards are saved on this PC when you use local mode.</p>
         </div>
     </div>
     <div class="app-container">
@@ -534,6 +535,7 @@
                             <button class="btn-primary" onclick="saveProfileSettings()">Save Profile Changes</button>
                         </div>
 
+                        <button id="profile-firebase-connect" class="btn-secondary hidden" onclick="showFirebaseLogin()">Connect Firebase to Sync</button>
                         <div id="profile-firebase-status" class="profile-firebase-status hidden">
                             <div class="firebase-linked-info">
                                 <span class="status-dot online"></span>

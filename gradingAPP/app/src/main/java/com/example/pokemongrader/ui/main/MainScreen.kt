@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -24,8 +25,12 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -260,7 +265,8 @@ fun MainScreen(
     val profileImageBase64 by repository.profileImageBase64.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
-    var activeTab by remember { mutableStateOf("binder") }
+    val compact = LocalConfiguration.current.screenHeightDp < 500
+    var activeTab by rememberSaveable { mutableStateOf("binder") }
 
     // Fetch on screen entry so cards always load without logout/login
     LaunchedEffect(Unit) {
@@ -268,13 +274,15 @@ fun MainScreen(
     }
 
     // Page selection for Binder Grid
-    var currentPage by remember { mutableStateOf(1) }
+    var currentPage by rememberSaveable { mutableStateOf(1) }
 
     // Filter and Sort states for Collection List
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedRarityFilter by remember { mutableStateOf("All") }
-    var selectedSortOption by remember { mutableStateOf("Dex Number") }
-    var showRepeated by remember { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedRarityFilter by rememberSaveable { mutableStateOf("All") }
+    var selectedSortOption by rememberSaveable { mutableStateOf("Dex Number") }
+    var showRepeated by rememberSaveable { mutableStateOf(false) }
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(currentPage) { gridState.scrollToItem(0) }
 
     var expandedRarityFilter by remember { mutableStateOf(false) }
     var expandedSortOption by remember { mutableStateOf(false) }
@@ -330,7 +338,7 @@ fun MainScreen(
         modifier = modifier.fillMaxSize().background(Color(0xFF020617))
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Column(modifier = Modifier.fillMaxSize().padding(if (compact) 8.dp else 16.dp)) {
 
                 // Profile Header (refresh button removed — pull-to-refresh is the gesture now)
                 Row(
@@ -340,7 +348,7 @@ fun MainScreen(
                         .background(Brush.horizontalGradient(listOf(Color(0x1F3B82F6), Color(0x1F1D4ED8))))
                         .border(1.dp, Color(0x333B82F6), RoundedCornerShape(16.dp))
                         .clickable { onNavigateToAccountSettings() }
-                        .padding(12.dp),
+                        .padding(if (compact) 6.dp else 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     ProfileImage(
@@ -349,7 +357,7 @@ fun MainScreen(
                         url = profileImageUrl,
                         base64Str = profileImageBase64,
                         modifier = Modifier
-                            .size(54.dp)
+                            .size(if (compact) 36.dp else 54.dp)
                             .clip(CircleShape)
                             .border(2.dp, Color(0xFF3B82F6), CircleShape)
                     )
@@ -375,7 +383,7 @@ fun MainScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(if (compact) 6.dp else 20.dp))
 
                 // Tab Selector
                 Row(
@@ -399,28 +407,36 @@ fun MainScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(if (compact) 6.dp else 16.dp))
 
                 if (activeTab == "binder") {
                     // Binder Grid View
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            TextButton(onClick = { if (currentPage > 1) currentPage-- }, enabled = currentPage > 1) {
+                                Text("Previous page")
+                            }
                             Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            TextButton(onClick = { currentPage++ }) { Text("Next page") }
                         }
+
+                        if (compact) Text("Scroll to see all 9 slots", color = Color.LightGray, fontSize = 11.sp)
 
                         var offsetX by remember { mutableStateOf(0f) }
 
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
+                            state = gridState,
                             contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier
-                                .fillMaxSize()
+                                .fillMaxWidth().weight(1f)
+                                .semantics { contentDescription = "Binder slots" }
                                 .pointerInput(Unit) {
                                     detectHorizontalDragGestures(
                                         onDragEnd = {
@@ -462,7 +478,7 @@ fun MainScreen(
                     }
                 } else {
                     // Collection List Filters
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
@@ -563,7 +579,7 @@ fun MainScreen(
 
                         LazyColumn(
                             contentPadding = PaddingValues(bottom = 80.dp),
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.weight(1f)
                         ) {
                             items(filteredCards) { card ->
                                 CollectionRow(
