@@ -114,7 +114,7 @@ DEFAULT_CONFIG = {
     "firebase_password": "",
     "firebase_id_token": "",
     "firebase_remember_password": True,
-    "username": "",
+    "username": "Trainer",
     "cover_title": "Pokémon Collection",
     "cover_subtitle": "My Binder Manager",
     "cover_owner": "Ash",
@@ -739,7 +739,7 @@ def sync_with_firebase(config, collection):
     # 1.5 Update Profile / Username from cloud
     cloud_profile = fetch_profile_from_firebase(config)
     if cloud_profile:
-        config["username"] = cloud_profile.get("username", config.get("username", "Dr4g0n"))
+        config["username"] = cloud_profile.get("username", config.get("username", "Trainer"))
         config["profile_picture_source"] = cloud_profile.get("profile_picture_source", config.get("profile_picture_source", "pokemon"))
         config["profile_featured_dex"] = int(cloud_profile.get("profile_featured_dex", config.get("profile_featured_dex", 25)))
         config["profile_image_url"] = cloud_profile.get("profile_image_url", config.get("profile_image_url", ""))
@@ -946,7 +946,7 @@ def push_profile_to_firebase(config):
                 pass
 
     profile_data = {
-        "username": config.get("username", "Dr4g0n"),
+        "username": config.get("username", "Trainer"),
         "profile_picture_source": config.get("profile_picture_source", "pokemon"),
         "profile_featured_dex": int(config.get("profile_featured_dex", 25)),
         "profile_image_url": config.get("profile_image_url", ""),
@@ -954,7 +954,7 @@ def push_profile_to_firebase(config):
     }    
     # Push username separately for backwards compatibility
     path_username = f"{db_url.rstrip('/')}/users/{user_id}/username.json"
-    make_firebase_request(path_username, method="PUT", data=config.get("username", "Dr4g0n"), token=token)
+    make_firebase_request(path_username, method="PUT", data=config.get("username", "Trainer"), token=token)
 
     path_profile = f"{db_url.rstrip('/')}/users/{user_id}/profile.json"
     _, err = make_firebase_request(path_profile, method="PUT", data=profile_data, token=token)

@@ -16,12 +16,12 @@ let appConfig = {
     firebase_remember_password: true,
     cover_title: "Pokémon Card Binder",
     cover_subtitle: "My Personal Collection Album",
-    cover_owner: "Dr4g0n",
+    cover_owner: "Trainer",
     cover_color: "#ef4444",
     cover_featured_dex: 25,
     cover_source: "pokemon",
     cover_image_url: "",
-    username: "Dr4g0n",
+    username: "Trainer",
     profile_picture_source: "pokemon",
     profile_featured_dex: 25,
     profile_image_url: ""
@@ -31,6 +31,8 @@ let collection = [];
 let pokemonLookupList = []; // Array of {id, name}
 let activeTab = "binder";
 let currentPage = 0;
+let lastRenderedPage = null;
+let pageTurnTimeout = null;
 let selectedPokemon = null; // Currently selected in form
 
 // Autocomplete navigation state
@@ -97,7 +99,7 @@ async function loadSettings() {
             document.getElementById("settings-gsheet-name").value = appConfig.gsheet_name || "";
             
             // Populate trainer profile settings
-            document.getElementById("settings-username").value = appConfig.username || "Dr4g0n";
+            document.getElementById("settings-username").value = appConfig.username || "Trainer";
             document.getElementById("settings-profile-source").value = appConfig.profile_picture_source || "pokemon";
             document.getElementById("settings-profile-dex").value = appConfig.profile_featured_dex || 25;
             document.getElementById("settings-profile-url").value = appConfig.profile_image_url || "";
@@ -271,6 +273,10 @@ function updateDashboardStats() {
 }
 
 // ==================== BINDER GRID RENDERING ====================
+function pageNavigationState(page, pageCount) {
+    return { previous: page > 0, next: page + 2 < pageCount };
+}
+
 function renderBinderGrid() {
     const leftGrid = document.getElementById("left-binder-grid");
     const rightGrid = document.getElementById("right-binder-grid");
@@ -283,6 +289,18 @@ function renderBinderGrid() {
         currentPage = currentPage - 1;
     }
     if (currentPage < 0) currentPage = 0;
+
+    const binderBook = document.querySelector(".binder-book");
+    if (binderBook && lastRenderedPage !== null && currentPage !== lastRenderedPage) {
+        const direction = currentPage > lastRenderedPage ? "forward" : "backward";
+        const animationClass = `page-turn-${direction}`;
+        binderBook.classList.remove("page-turn-forward", "page-turn-backward");
+        void binderBook.offsetWidth;
+        binderBook.classList.add(animationClass);
+        window.clearTimeout(pageTurnTimeout);
+        pageTurnTimeout = window.setTimeout(() => binderBook.classList.remove(animationClass), 500);
+    }
+    lastRenderedPage = currentPage;
     
     const leftPageNum = currentPage;
     const rightPageNum = currentPage + 1;
@@ -303,10 +321,12 @@ function renderBinderGrid() {
     collection.forEach(card => {
         if (card.Page > highestPage) highestPage = card.Page;
     });
-    // Max page spread boundary should match the next spread
-    let maxPage = Math.max(highestPage, rightPageNum);
-    if (maxPage % 2 !== 0) maxPage += 1;
-    document.getElementById("binder-max-page").textContent = maxPage;
+    let pageCount = highestPage + 1; // Include the cover and complete the final spread.
+    if (pageCount % 2 !== 0) pageCount += 1;
+    document.getElementById("binder-max-page").textContent = pageCount;
+    const navigation = pageNavigationState(leftPageNum, pageCount);
+    document.getElementById("page-turn-previous").hidden = !navigation.previous;
+    document.getElementById("page-turn-next").hidden = !navigation.next;
     
     // Filter cards for left and right pages
     const leftCards = collection.filter(c => c.Page === leftPageNum);
@@ -489,7 +509,7 @@ function renderBinderGrid() {
                     <p class="cover-subtitle">${escapeHtml(appConfig.cover_subtitle || "My Personal Collection Album")}</p>
                     <div class="cover-owner-badge">
                         <span style="color:var(--cover-accent);font-size:12px;display:flex;align-items:center;">🔴</span>
-                        <span>Trainer: <strong>${escapeHtml(appConfig.cover_owner || "Dr4g0n")}</strong></span>
+                        <span>Trainer: <strong>${escapeHtml(appConfig.cover_owner || "Trainer")}</strong></span>
                     </div>
                     <button class="cover-edit-btn" onclick="toggleCoverEditor(true)">Customize Cover</button>
                 </div>
@@ -505,7 +525,7 @@ function renderBinderGrid() {
                 <p class="cover-subtitle">${escapeHtml(appConfig.cover_subtitle || "My Personal Collection Album")}</p>
                 <div class="cover-owner-badge">
                     <span style="color:var(--cover-accent);font-size:12px;display:flex;align-items:center;">🔴</span>
-                    <span>Trainer: <strong>${escapeHtml(appConfig.cover_owner || "Dr4g0n")}</strong></span>
+                    <span>Trainer: <strong>${escapeHtml(appConfig.cover_owner || "Trainer")}</strong></span>
                 </div>
                 <button class="cover-edit-btn" onclick="toggleCoverEditor(true)">Customize Cover</button>
             `;
@@ -527,7 +547,7 @@ function renderBinderGrid() {
                     </div>
                     <div class="form-group">
                         <label>Trainer Owner Name</label>
-                        <input type="text" id="cover-edit-owner" value="${escapeHtml(appConfig.cover_owner || "Dr4g0n")}">
+                        <input type="text" id="cover-edit-owner" value="${escapeHtml(appConfig.cover_owner || "Trainer")}">
                     </div>
                     <div class="form-row-2">
                         <div class="form-group">
@@ -606,106 +626,73 @@ function quickAddCard(page, slot) {
 }
 
 // ==================== COLLECTION TABLE VIEW ====================
-function renderCollectionTable() {
-    const tableBody = document.getElementById("collection-table-body");
-    const noCards = document.getElementById("no-cards-found");
-    tableBody.innerHTML = "";
-    
-    const searchVal = document.getElementById("list-search").value.trim().toLowerCase();
-    const condVal = document.getElementById("filter-condition").value;
-    const typeFilterVal = document.getElementById("filter-type").value;
-    const sortBy = document.getElementById("sort-by").value;
-    
-    // Filter collection array
-    let filtered = collection.filter(card => {
-        const matchesSearch = !searchVal || 
-            card.Name.toLowerCase().includes(searchVal) || 
-            card["Dex Number"].toString() === searchVal || 
+function filterCollectionCards(cards, { searchVal = "", condVal = "", typeFilterVal = "", sortBy = "dex", showRepeated = false }) {
+    searchVal = searchVal.trim().toLowerCase();
+    let filtered = cards.filter(card => {
+        const matchesSearch = !searchVal || card.Name.toLowerCase().includes(searchVal) ||
+            card["Dex Number"].toString() === searchVal ||
             (card.Notes && card.Notes.toLowerCase().includes(searchVal)) ||
             `page ${card.Page}`.includes(searchVal);
-            
-        const matchesCond = !condVal || card.Condition === condVal;
-        const matchesType = !typeFilterVal || (card.Type || "Normal") === typeFilterVal;
-        
-        return matchesSearch && matchesCond && matchesType;
+        return matchesSearch && (!condVal || card.Condition === condVal) &&
+            (!typeFilterVal || (card.Type || "Normal") === typeFilterVal);
     });
-    
-    // Shared rarity order (most rare = lowest index)
+
     const RARITY_ORDER = [
         "Mega Hyper Rare", "Hyper Rare", "Mega Attack Rare",
         "Special Illustration Rare", "Illustration Rare", "Ace Spec Rare",
         "Secret Rare", "Ultra Rare", "Double Rare", "Shiny Rare",
         "Reverse Holo", "Holofoil Rare", "Rare", "Normal"
     ];
-    const rarityRank = (card) => {
-        const r = RARITY_ORDER.indexOf(card.Type || "Normal");
-        return r === -1 ? RARITY_ORDER.length : r;
+    const rarityRank = card => {
+        const rank = RARITY_ORDER.indexOf(card.Type || "Normal");
+        return rank === -1 ? RARITY_ORDER.length : rank;
     };
 
-    // Sort array
     filtered.sort((a, b) => {
         if (sortBy === "location") {
-            if (a.Page !== b.Page) return a.Page - b.Page;
-            // Within the same page: most rare first, then by slot
-            const rarityDiff = rarityRank(a) - rarityRank(b);
-            if (rarityDiff !== 0) return rarityDiff;
-            return a.Slot - b.Slot;
-        } else if (sortBy === "dex") {
-            const dexA = parseInt(a["Dex Number"]) || 9999;
-            const dexB = parseInt(b["Dex Number"]) || 9999;
-            if (dexA !== dexB) return dexA - dexB;
-            // Same dex number: most rare first
-            return rarityRank(a) - rarityRank(b);
-        } else if (sortBy === "rarity") {
-            const rarityOrder = [
-                "Mega Hyper Rare",
-                "Hyper Rare",
-                "Mega Attack Rare",
-                "Special Illustration Rare",
-                "Illustration Rare",
-                "Ace Spec Rare",
-                "Secret Rare",
-                "Ultra Rare",
-                "Double Rare",
-                "Shiny Rare",
-                "Reverse Holo",
-                "Holofoil Rare",
-                "Rare",
-                "Normal"
-            ];
-            const rankA = rarityOrder.indexOf(a.Type || "Normal");
-            const rankB = rarityOrder.indexOf(b.Type || "Normal");
-            const valA = rankA === -1 ? rarityOrder.length - 1 : rankA;
-            const valB = rankB === -1 ? rarityOrder.length - 1 : rankB;
-            if (valA !== valB) return valA - valB;
-            return a.Name.localeCompare(b.Name);
-        } else if (sortBy === "name") {
-            return a.Name.localeCompare(b.Name);
-        } else if (sortBy === "date") {
-            const dateA = new Date(a["Date Added"] || 0);
-            const dateB = new Date(b["Date Added"] || 0);
-            return dateB - dateA; // Descending
+            return a.Page - b.Page || rarityRank(a) - rarityRank(b) || a.Slot - b.Slot;
         }
+        if (sortBy === "dex") {
+            return (parseInt(a["Dex Number"]) || 9999) - (parseInt(b["Dex Number"]) || 9999) || rarityRank(a) - rarityRank(b);
+        }
+        if (sortBy === "rarity") {
+            const rank = card => {
+                const value = RARITY_ORDER.indexOf(card.Type || "Normal");
+                return value === -1 ? RARITY_ORDER.length - 1 : value;
+            };
+            return rank(a) - rank(b) || a.Name.localeCompare(b.Name);
+        }
+        if (sortBy === "name") return a.Name.localeCompare(b.Name);
+        if (sortBy === "date") return new Date(b["Date Added"] || 0) - new Date(a["Date Added"] || 0);
         return 0;
     });
-    
-    if (filtered.length === 0) {
-        noCards.classList.remove("hidden");
-        return;
-    }
-    
-    // Deduplicate: when showRepeated is OFF, keep only the rarest card per Pokémon
-    // Group key: dex number for real cards, name for custom (dex=0)
+
     if (!showRepeated) {
         const seen = new Set();
         filtered = filtered.filter(card => {
-            const key = card["Dex Number"] > 0
-                ? String(card["Dex Number"])
-                : `custom:${card.Name.toLowerCase()}`;
+            const key = card["Dex Number"] > 0 ? String(card["Dex Number"]) : `custom:${card.Name.toLowerCase()}`;
             if (seen.has(key)) return false;
             seen.add(key);
-            return true; // first occurrence = rarest (already sorted)
+            return true;
         });
+    }
+    return filtered;
+}
+
+function renderCollectionTable() {
+    const tableBody = document.getElementById("collection-table-body");
+    const noCards = document.getElementById("no-cards-found");
+    tableBody.innerHTML = "";
+    const filtered = filterCollectionCards(collection, {
+        searchVal: document.getElementById("list-search").value,
+        condVal: document.getElementById("filter-condition").value,
+        typeFilterVal: document.getElementById("filter-type").value,
+        sortBy: document.getElementById("sort-by").value,
+        showRepeated
+    });
+    if (filtered.length === 0) {
+        noCards.classList.remove("hidden");
+        return;
     }
     noCards.classList.add("hidden");
     
@@ -1565,7 +1552,7 @@ function renderTrainerProfile() {
     if (!nameEl || !avatarEl) return;
     
     // Username
-    const username = appConfig.username || "Dr4g0n";
+    const username = appConfig.username || "Trainer";
     nameEl.textContent = username;
     
     // Avatar

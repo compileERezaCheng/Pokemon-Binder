@@ -30,13 +30,14 @@ object FirebaseClient {
     }
 
     private val API_KEY = decrypt(BuildConfig.ENC_FIREBASE_API_KEY)
-    private val DB_URL = decrypt(BuildConfig.ENC_FIREBASE_DB_URL)
+    internal var databaseUrl = decrypt(BuildConfig.ENC_FIREBASE_DB_URL)
+    internal var connectionFactory: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
 
     /** Silently exchange a refreshToken for a new idToken. Returns null on failure. */
     suspend fun refreshIdToken(refreshToken: String): String? = withContext(Dispatchers.IO) {
         try {
             val url = URL("https://securetoken.googleapis.com/v1/token?key=$API_KEY")
-            val conn = url.openConnection() as HttpURLConnection
+            val conn = connectionFactory(url)
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             conn.doOutput = true
@@ -78,7 +79,7 @@ object FirebaseClient {
 
     suspend fun signIn(email: String, password: String): AuthResult = withContext(Dispatchers.IO) {
         val url = URL("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$API_KEY")
-        val conn = url.openConnection() as HttpURLConnection
+        val conn = connectionFactory(url)
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
@@ -96,7 +97,7 @@ object FirebaseClient {
 
     suspend fun signUp(email: String, password: String): AuthResult = withContext(Dispatchers.IO) {
         val url = URL("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$API_KEY")
-        val conn = url.openConnection() as HttpURLConnection
+        val conn = connectionFactory(url)
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
@@ -113,15 +114,15 @@ object FirebaseClient {
     }
 
     suspend fun fetchCollection(uid: String, token: String): List<Card> = withContext(Dispatchers.IO) {
-        val url = URL("$DB_URL/users/$uid/collection.json?auth=$token")
-        val conn = url.openConnection() as HttpURLConnection
+        val url = URL("$databaseUrl/users/$uid/collection.json?auth=$token")
+        val conn = connectionFactory(url)
         val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
         Card.parseCollection(res)
     }
 
     suspend fun saveCollection(uid: String, token: String, collection: List<Card>): Unit = withContext(Dispatchers.IO) {
-        val url = URL("$DB_URL/users/$uid/collection.json?auth=$token")
-        val conn = url.openConnection() as HttpURLConnection
+        val url = URL("$databaseUrl/users/$uid/collection.json?auth=$token")
+        val conn = connectionFactory(url)
         conn.requestMethod = "PUT"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
@@ -131,8 +132,8 @@ object FirebaseClient {
 
     suspend fun fetchUsername(uid: String, token: String): String? = withContext(Dispatchers.IO) {
         try {
-            val url = URL("$DB_URL/users/$uid/username.json?auth=$token")
-            val conn = url.openConnection() as HttpURLConnection
+            val url = URL("$databaseUrl/users/$uid/username.json?auth=$token")
+            val conn = connectionFactory(url)
             val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
             if (res.trim() == "null" || res.trim().isEmpty()) null else res.replace("\"", "")
         } catch (e: Exception) {
@@ -142,8 +143,8 @@ object FirebaseClient {
 
     suspend fun fetchProfile(uid: String, token: String): JSONObject? = withContext(Dispatchers.IO) {
         try {
-            val url = URL("$DB_URL/users/$uid/profile.json?auth=$token")
-            val conn = url.openConnection() as HttpURLConnection
+            val url = URL("$databaseUrl/users/$uid/profile.json?auth=$token")
+            val conn = connectionFactory(url)
             val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
             if (res.trim() == "null" || res.trim().isEmpty()) null else JSONObject(res)
         } catch (e: Exception) {
@@ -160,8 +161,8 @@ object FirebaseClient {
         urlImg: String,
         base64Img: String
     ): Unit = withContext(Dispatchers.IO) {
-        val url = URL("$DB_URL/users/$uid/profile.json?auth=$token")
-        val conn = url.openConnection() as HttpURLConnection
+        val url = URL("$databaseUrl/users/$uid/profile.json?auth=$token")
+        val conn = connectionFactory(url)
         conn.requestMethod = "PUT"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
@@ -176,8 +177,8 @@ object FirebaseClient {
         conn.outputStream.write(profile.toString().toByteArray())
         
         // Also update the top-level username for compatibility
-        val uUrl = URL("$DB_URL/users/$uid/username.json?auth=$token")
-        val uConn = uUrl.openConnection() as HttpURLConnection
+        val uUrl = URL("$databaseUrl/users/$uid/username.json?auth=$token")
+        val uConn = connectionFactory(uUrl)
         uConn.requestMethod = "PUT"
         uConn.doOutput = true
         uConn.outputStream.write("\"$username\"".toByteArray())
@@ -199,8 +200,8 @@ object FirebaseClient {
     ): Unit = withContext(Dispatchers.IO) {
         try {
             val sampleId = System.currentTimeMillis().toString()
-            val url = URL("$DB_URL/grading_dataset/$sampleId.json?auth=$token")
-            val conn = url.openConnection() as HttpURLConnection
+            val url = URL("$databaseUrl/grading_dataset/$sampleId.json?auth=$token")
+            val conn = connectionFactory(url)
             conn.requestMethod = "PUT"
             conn.setRequestProperty("Content-Type", "application/json")
             conn.doOutput = true

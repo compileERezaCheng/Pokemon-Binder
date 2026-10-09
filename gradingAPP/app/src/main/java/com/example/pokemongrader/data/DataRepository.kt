@@ -63,7 +63,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
     override val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     // Profile Settings
-    private val _username = MutableStateFlow("Dr4g0n")
+    private val _username = MutableStateFlow("Trainer")
     override val username: StateFlow<String> = _username.asStateFlow()
 
     private val _profilePicSource = MutableStateFlow("pokemon")
@@ -90,7 +90,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         set(value) { _prefilledSlot = value }
 
     init {
-        _username.value = prefs.getString("username", "Dr4g0n") ?: "Dr4g0n"
+        _username.value = prefs.getString("username", "Trainer") ?: "Trainer"
         _profilePicSource.value = prefs.getString("profile_pic_source", "pokemon") ?: "pokemon"
         _profileFeaturedDex.value = prefs.getInt("profile_featured_dex", 25)
         _profileImageUrl.value = prefs.getString("profile_image_url", "") ?: ""
@@ -109,14 +109,19 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
      * the remote collection. Falls back to stored idToken if refresh fails.
      */
     override suspend fun refreshAndFetch(): Boolean {
-        val storedRefreshToken = prefs.getString("refresh_token", "") ?: ""
-        if (storedRefreshToken.isNotEmpty()) {
-            val newIdToken = FirebaseClient.refreshIdToken(storedRefreshToken)
-            if (newIdToken != null) {
-                prefs.edit().putString("token", newIdToken).apply()
+        _isLoading.value = true
+        return try {
+            val storedRefreshToken = prefs.getString("refresh_token", "") ?: ""
+            if (storedRefreshToken.isNotEmpty()) {
+                val newIdToken = FirebaseClient.refreshIdToken(storedRefreshToken)
+                if (newIdToken != null) {
+                    prefs.edit().putString("token", newIdToken).apply()
+                }
             }
+            fetchRemote()
+        } finally {
+            _isLoading.value = false
         }
-        return fetchRemote()
     }
 
     override suspend fun login(email: String, password: String): Boolean {
@@ -209,7 +214,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
 
             val profile = FirebaseClient.fetchProfile(uid, token)
             if (profile != null) {
-                val uname = profile.optString("username", "Dr4g0n")
+                val uname = profile.optString("username", "Trainer")
                 val source = profile.optString("profile_picture_source", "pokemon")
                 val dex = profile.optInt("profile_featured_dex", 25)
                 val urlImg = profile.optString("profile_image_url", "")
@@ -283,7 +288,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         prefs.edit().clear().apply()
         _isLoggedIn.value = false
         _cards.value = emptyList()
-        _username.value = "Dr4g0n"
+        _username.value = "Trainer"
         _profilePicSource.value = "pokemon"
         _profileFeaturedDex.value = 25
         _profileImageUrl.value = ""

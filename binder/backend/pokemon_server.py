@@ -1,13 +1,11 @@
 import http.server
 import socketserver
 import json
+import errno
 import os
 import sys
 import urllib.parse
 from datetime import datetime
-import time
-
-LAST_HEARTBEAT = time.time()
 
 # Add the current directory to sys.path so we can import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +36,7 @@ else:
 
 DATA_DIR = pokemon_binder.DATA_DIR
 PORT = 8080
+_SINGLE_INSTANCE_HANDLE = None
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def end_headers(self):
@@ -511,38 +510,311 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         def shutdown_process(server):
             time.sleep(0.5)  # Wait 500ms to allow response to send fully
             server.shutdown()
-            server.server_close()
-            os._exit(0)
             
         self.send_json({"success": True, "message": "Server is shutting down..."})
-        threading.Thread(target=shutdown_process, args=(self.server,)).start()
+        threading.Thread(target=shutdown_process, args=(self.server,), daemon=True).start()
 
     def handle_heartbeat(self):
-        global LAST_HEARTBEAT
-        LAST_HEARTBEAT = time.time()
         self.send_json({"success": True})
-
-def monitor_heartbeat(server):
-    # 15-second grace period at startup to allow Edge/Chrome app to launch and load JavaScript
-    time.sleep(15)
-    while True:
-        time.sleep(2)
-        if time.time() - LAST_HEARTBEAT > 12:
-            # No heartbeat received for 12 seconds, assume app was closed
-            print("[*] No active app connection detected. Automatically shutting down server...")
-            server.shutdown()
-            server.server_close()
-            os._exit(0)
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     # This enables handling multiple requests in parallel without freezing the connection
-    allow_reuse_address = True
+    daemon_threads = True
+
+
+def acquire_single_instance():
+    global _SINGLE_INSTANCE_HANDLE
+    if os.name != "nt":
+        return True
+
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+
+    ctypes.set_last_error(0)
+    handle = kernel32.CreateMutexW(None, False, "Local\\PokebinderSingleInstance")
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+
+    _SINGLE_INSTANCE_HANDLE = handle
+    return True
+
+
+def show_startup_message(message, title="PokéBinder"):
+    if os.name == "nt":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    else:
+        print(message)
+
+
+class SystemTrayIcon:
+    WM_TRAY = 0x8001
+    WM_CLOSE = 0x0010
+    WM_DESTROY = 0x0002
+    WM_LBUTTONDBLCLK = 0x0203
+    WM_RBUTTONUP = 0x0205
+    WM_CONTEXTMENU = 0x007B
+    WM_NULL = 0x0000
+    NIM_ADD = 0x00000000
+    NIM_DELETE = 0x00000002
+    NIF_MESSAGE = 0x00000001
+    NIF_ICON = 0x00000002
+    NIF_TIP = 0x00000004
+    IMAGE_ICON = 1
+    LR_LOADFROMFILE = 0x0010
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_POPUP = 0x80000000
+    MF_STRING = 0x00000000
+    MF_SEPARATOR = 0x00000800
+    TPM_RETURNCMD = 0x0100
+    TPM_RIGHTBUTTON = 0x0002
+    OPEN_COMMAND = 1001
+    EXIT_COMMAND = 1002
+
+    def __init__(self, on_open, on_exit):
+        import threading
+        self.on_open = on_open
+        self.on_exit = on_exit
+        self._ready = threading.Event()
+        self._thread = None
+        self._hwnd = None
+        self._kernel = None
+        self._user = None
+        self._shell = None
+        self._notify_data = None
+        self._icon = None
+        self._added = False
+        self._taskbar_created = 0
+        self._error = None
+
+    def start(self):
+        import threading
+        if os.name != "nt":
+            raise OSError("The system tray is available on Windows only.")
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(5):
+            self.stop()
+            raise RuntimeError("Timed out creating the PokéBinder tray icon.")
+        if self._error:
+            raise RuntimeError(f"Could not create the PokéBinder tray icon: {self._error}") from self._error
+
+    def stop(self):
+        if self._hwnd and self._user:
+            self._user.PostMessageW(self._hwnd, self.WM_CLOSE, 0, 0)
+        if self._thread and self._thread is not __import__("threading").current_thread():
+            self._thread.join(timeout=2)
+
+    def _run(self):
+        import ctypes
+        from ctypes import wintypes
+
+        LRESULT = ctypes.c_ssize_t
+        WPARAM = ctypes.c_size_t
+        LPARAM = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, WPARAM, LPARAM)
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [
+                ("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HANDLE),
+                ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR),
+            ]
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND), ("message", wintypes.UINT),
+                ("wParam", WPARAM), ("lParam", LPARAM), ("time", wintypes.DWORD),
+                ("pt", POINT), ("lPrivate", wintypes.DWORD),
+            ]
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD), ("Data4", wintypes.BYTE * 8),
+            ]
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND),
+                ("uID", wintypes.UINT), ("uFlags", wintypes.UINT),
+                ("uCallbackMessage", wintypes.UINT), ("hIcon", wintypes.HICON),
+                ("szTip", wintypes.WCHAR * 128), ("dwState", wintypes.DWORD),
+                ("dwStateMask", wintypes.DWORD), ("szInfo", wintypes.WCHAR * 256),
+                ("uTimeoutOrVersion", wintypes.UINT), ("szInfoTitle", wintypes.WCHAR * 64),
+                ("dwInfoFlags", wintypes.DWORD), ("guidItem", GUID),
+                ("hBalloonIcon", wintypes.HICON),
+            ]
+
+        try:
+            self._user = ctypes.windll.user32
+            self._kernel = ctypes.windll.kernel32
+            self._shell = ctypes.windll.shell32
+            self._point_type = POINT
+            self._configure_apis(ctypes, wintypes, WNDCLASSW, MSG, NOTIFYICONDATAW, POINT, WPARAM, LPARAM)
+            hinstance = self._kernel.GetModuleHandleW(None)
+            class_name = "PokemonBinderTrayWindow"
+            self._taskbar_created = self._user.RegisterWindowMessageW("TaskbarCreated")
+            self._wnd_proc = WNDPROC(self._window_proc)
+            window_class = WNDCLASSW()
+            window_class.lpfnWndProc = self._wnd_proc
+            window_class.hInstance = hinstance
+            window_class.lpszClassName = class_name
+            if not self._user.RegisterClassW(ctypes.byref(window_class)) and ctypes.get_last_error() != 1410:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            self._hwnd = self._user.CreateWindowExW(
+                self.WS_EX_TOOLWINDOW, class_name, "PokéBinder", self.WS_POPUP,
+                0, 0, 0, 0, None, None, hinstance, None
+            )
+            if not self._hwnd:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            self._notify_data = NOTIFYICONDATAW()
+            self._notify_data.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+            self._notify_data.hWnd = self._hwnd
+            self._notify_data.uID = 1
+            self._notify_data.uFlags = self.NIF_MESSAGE | self.NIF_ICON | self.NIF_TIP
+            self._notify_data.uCallbackMessage = self.WM_TRAY
+            self._notify_data.szTip = "PokéBinder"
+            icon_path = os.path.join(INTERNAL_DATA_DIR, "pokeball.ico")
+            self._icon = self._user.LoadImageW(None, icon_path, self.IMAGE_ICON, 16, 16, self.LR_LOADFROMFILE)
+            if not self._icon:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._notify_data.hIcon = self._icon
+            self._add_icon()
+            self._ready.set()
+
+            message = MSG()
+            while self._user.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+                self._user.TranslateMessage(ctypes.byref(message))
+                self._user.DispatchMessageW(ctypes.byref(message))
+        except Exception as error:
+            self._error = error
+            self._ready.set()
+        finally:
+            self._remove_icon()
+            if self._hwnd and self._user:
+                self._user.DestroyWindow(self._hwnd)
+                self._hwnd = None
+            if self._icon and self._user:
+                self._user.DestroyIcon(self._icon)
+                self._icon = None
+
+    def _configure_apis(self, ctypes, wintypes, wndclass, message, notify_data, point, wparam, lparam):
+        self._kernel.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        self._kernel.GetModuleHandleW.restype = wintypes.HINSTANCE
+        self._user.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
+        self._user.RegisterWindowMessageW.restype = wintypes.UINT
+        self._user.RegisterClassW.argtypes = [ctypes.POINTER(wndclass)]
+        self._user.RegisterClassW.restype = wintypes.ATOM
+        self._user.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        ]
+        self._user.CreateWindowExW.restype = wintypes.HWND
+        self._user.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self._user.LoadImageW.restype = wintypes.HICON
+        self._user.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wparam, lparam]
+        self._user.DefWindowProcW.restype = ctypes.c_ssize_t
+        self._user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wparam, lparam]
+        self._user.PostMessageW.restype = wintypes.BOOL
+        self._user.GetMessageW.argtypes = [ctypes.POINTER(message), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        self._user.GetMessageW.restype = ctypes.c_int
+        self._user.TranslateMessage.argtypes = [ctypes.POINTER(message)]
+        self._user.DispatchMessageW.argtypes = [ctypes.POINTER(message)]
+        self._user.DestroyWindow.argtypes = [wintypes.HWND]
+        self._user.DestroyIcon.argtypes = [wintypes.HICON]
+        self._user.PostQuitMessage.argtypes = [ctypes.c_int]
+        self._user.CreatePopupMenu.restype = wintypes.HMENU
+        self._user.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
+        self._user.DestroyMenu.argtypes = [wintypes.HMENU]
+        self._user.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self._user.GetCursorPos.argtypes = [ctypes.POINTER(point)]
+        self._user.TrackPopupMenu.argtypes = [
+            wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.LPVOID,
+        ]
+        self._user.TrackPopupMenu.restype = wintypes.UINT
+        self._shell.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(notify_data)]
+        self._shell.Shell_NotifyIconW.restype = wintypes.BOOL
+
+    def _add_icon(self):
+        import ctypes
+        if self._shell.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(self._notify_data)):
+            self._added = True
+        else:
+            import ctypes
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def _remove_icon(self):
+        if self._added:
+            import ctypes
+            self._shell.Shell_NotifyIconW(self.NIM_DELETE, ctypes.byref(self._notify_data))
+            self._added = False
+
+    def _window_proc(self, hwnd, message, wparam, lparam):
+        if message == self._taskbar_created:
+            self._add_icon()
+            return 0
+        if message == self.WM_TRAY:
+            if lparam == self.WM_LBUTTONDBLCLK:
+                self.on_open()
+            elif lparam in (self.WM_RBUTTONUP, self.WM_CONTEXTMENU):
+                self._show_menu(hwnd)
+            return 0
+        if message == self.WM_CLOSE:
+            self._remove_icon()
+            self._user.DestroyWindow(hwnd)
+            return 0
+        if message == self.WM_DESTROY:
+            self._hwnd = None
+            self._user.PostQuitMessage(0)
+            return 0
+        return self._user.DefWindowProcW(hwnd, message, wparam, lparam)
+
+    def _show_menu(self, hwnd):
+        import ctypes
+        from ctypes import wintypes
+
+        menu = self._user.CreatePopupMenu()
+        if not menu:
+            return
+        self._user.AppendMenuW(menu, self.MF_STRING, self.OPEN_COMMAND, "Abrir PokéBinder")
+        self._user.AppendMenuW(menu, self.MF_SEPARATOR, 0, None)
+        self._user.AppendMenuW(menu, self.MF_STRING, self.EXIT_COMMAND, "Sair")
+        self._user.SetForegroundWindow(hwnd)
+        point = self._point_type()
+        self._user.GetCursorPos(ctypes.byref(point))
+        command = self._user.TrackPopupMenu(
+            menu, self.TPM_RETURNCMD | self.TPM_RIGHTBUTTON,
+            point.x, point.y, 0, hwnd, None
+        )
+        self._user.DestroyMenu(menu)
+        self._user.PostMessageW(hwnd, self.WM_NULL, 0, 0)
+        if command == self.OPEN_COMMAND:
+            self.on_open()
+        elif command == self.EXIT_COMMAND:
+            self.on_exit()
+
 
 def launch_browser():
-    import subprocess
     import time
     import http.client
-    import shutil
+    import webbrowser
 
     # 1. Wait for server to be ready to avoid "Connection Refused" errors
     max_retries = 20
@@ -562,35 +834,7 @@ def launch_browser():
     if not ready:
         return
 
-    # 2. Find Microsoft Edge for "App Mode" to make it look like a standalone app
-    edge_cmd = "msedge.exe"
-    edge_path = shutil.which(edge_cmd)
-    
-    if not edge_path:
-        # Check standard Windows installation paths if not in system PATH
-        possible_paths = [
-            os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'Microsoft\\Edge\\Application\\msedge.exe'),
-            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'Microsoft\\Edge\\Application\\msedge.exe'),
-            os.path.expanduser('~\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe')
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                edge_path = path
-                break
-
-    # 3. Launch in App Mode if Edge is found
-    if edge_path:
-        try:
-            # --app flag removes address bar/tabs for the native app feel
-            subprocess.Popen([edge_path, f'--app=http://localhost:{PORT}', '--window-size=1320,880'], 
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-        except Exception:
-            pass
-
-    # Final Fallback: Open in the user's default browser if Edge App Mode fails
     try:
-        import webbrowser
         webbrowser.open(f'http://localhost:{PORT}')
     except Exception:
         pass
@@ -636,7 +880,24 @@ def check_setup_shortcut():
                 pass
 
 def main():
+    import threading
+    httpd = None
+    tray = None
     try:
+        if not acquire_single_instance():
+            show_startup_message("PokéBinder is already running. Use the existing tray icon.")
+            return
+
+        try:
+            httpd = ThreadedHTTPServer(("", PORT), BinderHTTPRequestHandler)
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10048:
+                show_startup_message(
+                    f"Port {PORT} is already in use. PokéBinder may already be running; check the tray icon near the clock."
+                )
+                return
+            raise
+
         # Make sure cache is loaded once on server startup to speed up response
         print("[*] Pre-loading PokeAPI local cache...")
         pokemon_binder.load_pokemon_database()
@@ -647,36 +908,39 @@ def main():
         except Exception:
             pass
 
-        # Launch browser in a background thread
-        import threading
-        browser_thread = threading.Thread(target=launch_browser)
-        browser_thread.daemon = True
-        browser_thread.start()
-        
-        server_address = ('', PORT)
-        httpd = ThreadedHTTPServer(server_address, BinderHTTPRequestHandler)
-        
-        # Heartbeat monitor
-        monitor_thread = threading.Thread(target=monitor_heartbeat, args=(httpd,))
-        monitor_thread.daemon = True
-        monitor_thread.start()
+        def open_browser():
+            threading.Thread(target=launch_browser, daemon=True).start()
+
+        def exit_server():
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+        tray = SystemTrayIcon(open_browser, exit_server)
+        tray.start()
+        open_browser()
         
         print(f"\n=======================================================")
         print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
         print(f"   Running on http://localhost:{PORT}")
-        print(f"   Press Ctrl+C in this window to stop the server")
+        print(f"   Use the PokéBinder tray icon to reopen the binder or exit")
         print(f"=======================================================\n")
         
         httpd.serve_forever()
-    except Exception as e:
-        import traceback
-        with open("startup_error.log", "w") as f:
-            f.write(str(e) + "\n")
-            f.write(traceback.format_exc())
-        sys.exit(1)
     except KeyboardInterrupt:
         print("\nShutting down server...")
-        sys.exit(0)
+    except Exception as e:
+        import traceback
+        try:
+            with open(STARTUP_LOG, "w", encoding="utf-8") as f:
+                f.write(str(e) + "\n")
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+        show_startup_message(f"PokéBinder could not start: {e}")
+    finally:
+        if tray:
+            tray.stop()
+        if httpd:
+            httpd.server_close()
 
 if __name__ == '__main__':
     main()

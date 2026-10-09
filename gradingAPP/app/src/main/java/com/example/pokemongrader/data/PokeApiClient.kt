@@ -12,6 +12,11 @@ object PokeApiClient {
     /** Cached list of all Pokémon names (fetched once, stored in-memory). */
     private var cachedNames: List<String>? = null
 
+    fun binderPosition(dexNumber: Int): Pair<Int, Int> {
+        require(dexNumber > 0)
+        return ((dexNumber - 1) / 9 + 1) to ((dexNumber - 1) % 9 + 1)
+    }
+
     fun normalizePokemonName(name: String): String {
         var n = name.lowercase().trim()
         // 1. Remove text inside parentheses (e.g. "Pikachu (Japanese version)" -> "Pikachu")

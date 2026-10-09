@@ -1,7 +1,9 @@
 package com.example.pokemongrader.ui.main
 
 import com.example.pokemongrader.data.Card
+import com.example.pokemongrader.data.PokeApiClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Locale
@@ -69,6 +71,32 @@ class MainScreenViewModelTest {
         assertTrue(json.contains("\"Name\":\"pikachu\""))
         assertTrue(json.contains("\"Page\":1"))
         assertTrue(json.contains("\"Slot\":1"))
+    }
+
+    @Test
+    fun legacyCardsWithoutSetsOrRarityRemainReadable() {
+        val oldJson = """[{"Page":2,"Slot":3,"Dex Number":25,"Name":"pikachu","set":"Base Set","Condition":"LP","Notes":""}]"""
+
+        val card = Card.parseCollection(oldJson).single()
+        assertEquals("Normal", card.type)
+        assertEquals(25, card.dexNumber)
+        assertFalse(Card.serializeCollection(listOf(card)).contains("\"set\""))
+    }
+
+    @Test
+    fun foreignLanguageCardNamesNormalizeForDexLookup() {
+        assertEquals("pikachu", PokeApiClient.normalizePokemonName("Pikachu (Japanese version)"))
+        assertEquals("charizard", PokeApiClient.normalizePokemonName("Charizard JP"))
+        assertEquals(listOf("Pikachu", "Pikachu Libre"), PokeApiClient.searchPokemon("pika", listOf("Pikachu", "Pikachu Libre", "Charizard"), 2))
+        assertTrue(PokeApiClient.searchPokemon("p", listOf("Pikachu")).isEmpty())
+    }
+
+    @Test
+    fun dexNumbersMapToNinePocketBinderCoordinates() {
+        assertEquals(1 to 1, PokeApiClient.binderPosition(1))
+        assertEquals(1 to 9, PokeApiClient.binderPosition(9))
+        assertEquals(2 to 1, PokeApiClient.binderPosition(10))
+        assertEquals(3 to 7, PokeApiClient.binderPosition(25))
     }
 
     @Test

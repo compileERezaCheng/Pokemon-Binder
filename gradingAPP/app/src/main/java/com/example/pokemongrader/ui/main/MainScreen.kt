@@ -16,6 +16,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FilterList
@@ -24,6 +31,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.core.LinearEasing
@@ -242,13 +250,17 @@ fun ProfileImage(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun MainScreen(
     repository: DataRepository,
     onNavigateToScan: () -> Unit,
     onNavigateToCardDetails: (Int, Int, String) -> Unit,
     onNavigateToAccountSettings: () -> Unit,
+    activeTab: String,
+    onActiveTabChange: (String) -> Unit,
+    currentPage: Int,
+    onCurrentPageChange: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val cards by repository.cards.collectAsStateWithLifecycle()
@@ -260,21 +272,12 @@ fun MainScreen(
     val profileImageBase64 by repository.profileImageBase64.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
-    var activeTab by remember { mutableStateOf("binder") }
-
-    // Fetch on screen entry so cards always load without logout/login
-    LaunchedEffect(Unit) {
-        repository.refreshAndFetch()
-    }
-
-    // Page selection for Binder Grid
-    var currentPage by remember { mutableStateOf(1) }
 
     // Filter and Sort states for Collection List
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedRarityFilter by remember { mutableStateOf("All") }
-    var selectedSortOption by remember { mutableStateOf("Dex Number") }
-    var showRepeated by remember { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedRarityFilter by rememberSaveable { mutableStateOf("All") }
+    var selectedSortOption by rememberSaveable { mutableStateOf("Dex Number") }
+    var showRepeated by rememberSaveable { mutableStateOf(false) }
 
     var expandedRarityFilter by remember { mutableStateOf(false) }
     var expandedSortOption by remember { mutableStateOf(false) }
@@ -388,13 +391,13 @@ fun MainScreen(
                     TabButton(
                         text = "BINDER",
                         isSelected = activeTab == "binder",
-                        onClick = { activeTab = "binder" },
+                        onClick = { onActiveTabChange("binder") },
                         modifier = Modifier.weight(1f)
                     )
                     TabButton(
                         text = "COLLECTION",
                         isSelected = activeTab == "collection",
-                        onClick = { activeTab = "collection" },
+                        onClick = { onActiveTabChange("collection") },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -402,61 +405,69 @@ fun MainScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (activeTab == "binder") {
-                    // Binder Grid View
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Page $currentPage", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        }
+                    AnimatedContent(
+                        targetState = currentPage,
+                        transitionSpec = {
+                            val direction = if (targetState > initialState) 1 else -1
+                            (slideInHorizontally(tween(250)) { direction * it } + fadeIn(tween(180))) togetherWith
+                                (slideOutHorizontally(tween(250)) { -direction * it } + fadeOut(tween(180)))
+                        },
+                        label = "binder-page-turn",
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Page $page", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            }
 
-                        var offsetX by remember { mutableStateOf(0f) }
+                            var offsetX by remember { mutableStateOf(0f) }
 
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(3),
-                            contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectHorizontalDragGestures(
-                                        onDragEnd = {
-                                            if (offsetX < -150f) {
-                                                // Swipe Left -> Next Page
-                                                currentPage++
-                                            } else if (offsetX > 150f) {
-                                                // Swipe Right -> Prev Page
-                                                if (currentPage > 1) currentPage--
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(3),
+                                contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(Unit) {
+                                        detectHorizontalDragGestures(
+                                            onDragEnd = {
+                                                if (offsetX < -150f) {
+                                                    onCurrentPageChange(currentPage + 1)
+                                                } else if (offsetX > 150f && currentPage > 1) {
+                                                    onCurrentPageChange(currentPage - 1)
+                                                }
+                                                offsetX = 0f
+                                            },
+                                            onHorizontalDrag = { change, dragAmount ->
+                                                change.consume()
+                                                offsetX += dragAmount
                                             }
-                                            offsetX = 0f
-                                        },
-                                        onHorizontalDrag = { change, dragAmount ->
-                                            change.consume()
-                                            offsetX += dragAmount
+                                        )
+                                    }
+                            ) {
+                                items(9) { index ->
+                                    val slotIndex = index + 1
+                                    val pocketCards = cards.filter { it.page == page && it.slot == slotIndex }
+                                    PocketCell(
+                                        slot = slotIndex,
+                                        cards = pocketCards,
+                                        onClick = {
+                                            if (pocketCards.isNotEmpty()) {
+                                                val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
+                                                onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded)
+                                            } else {
+                                                repository.prefilledPage = page
+                                                repository.prefilledSlot = slotIndex
+                                                onNavigateToScan()
+                                            }
                                         }
                                     )
                                 }
-                        ) {
-                            items(9) { index ->
-                                val slotIndex = index + 1
-                                val pocketCards = cards.filter { it.page == currentPage && it.slot == slotIndex }
-                                PocketCell(
-                                    slot = slotIndex,
-                                    cards = pocketCards,
-                                    onClick = {
-                                        if (pocketCards.isNotEmpty()) {
-                                            val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
-                                            onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded)
-                                        } else {
-                                            repository.prefilledPage = currentPage
-                                            repository.prefilledSlot = slotIndex
-                                            onNavigateToScan()
-                                        }
-                                    }
-                                )
                             }
                         }
                     }

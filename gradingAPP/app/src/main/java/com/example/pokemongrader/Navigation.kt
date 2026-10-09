@@ -2,6 +2,9 @@ package com.example.pokemongrader
 
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -21,6 +24,8 @@ fun MainNavigation(repository: DataRepository) {
   val isLoggedIn by repository.isLoggedIn.collectAsStateWithLifecycle()
   val initialKey = if (isLoggedIn) Main else Login
   val backStack = rememberNavBackStack(initialKey)
+  val activeTab = rememberSaveable { mutableStateOf("binder") }
+  val currentPage = rememberSaveable { mutableIntStateOf(1) }
 
   NavDisplay(
       backStack = backStack,
@@ -39,12 +44,20 @@ fun MainNavigation(repository: DataRepository) {
             onNavigateToScan = { backStack.add(Scan) },
             onNavigateToCardDetails = { page, slot, date -> backStack.add(CardDetails(page, slot, date)) },
             onNavigateToAccountSettings = { backStack.add(AccountSettings) },
+            activeTab = activeTab.value,
+            onActiveTabChange = { activeTab.value = it },
+            currentPage = currentPage.intValue,
+            onCurrentPageChange = { currentPage.intValue = it },
             modifier = Modifier.safeDrawingPadding()
           )
         }
         entry<Scan> {
           ScanScreen(
             repository = repository,
+            onCardAdded = { page ->
+              activeTab.value = "binder"
+              currentPage.intValue = page
+            },
             onNavigateBack = { backStack.removeLastOrNull() },
             modifier = Modifier.safeDrawingPadding()
           )
@@ -66,6 +79,8 @@ fun MainNavigation(repository: DataRepository) {
             onNavigateBack = { backStack.removeLastOrNull() },
             onLogout = {
                 repository.logout()
+                activeTab.value = "binder"
+                currentPage.intValue = 1
                 backStack.replaceAll { Login }
             },
             modifier = Modifier.safeDrawingPadding()

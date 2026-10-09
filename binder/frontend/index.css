@@ -66,6 +66,22 @@ button, input, select {
     color: inherit;
 }
 
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    color-scheme: dark;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='m7 10 5 5 5-5' stroke='%239aa0b9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px;
+    cursor: pointer;
+}
+
+select option {
+    background-color: #171923;
+    color: var(--text-primary);
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;
@@ -399,10 +415,10 @@ button, input, select {
 .pagination-controls {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     background-color: var(--bg-card);
     border: 1px solid var(--border-color);
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: var(--radius-lg);
 }
 
@@ -428,9 +444,24 @@ button, input, select {
 .page-indicator-wrapper {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     font-size: 13px;
     color: var(--text-secondary);
+}
+
+.page-indicator-wrapper label {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.page-spread-summary {
+    padding-left: 10px;
+    border-left: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+
+.page-spread-summary strong {
+    color: var(--text-primary);
 }
 
 .page-indicator-wrapper input {
@@ -452,14 +483,63 @@ button, input, select {
 
 .binder-book-container {
     flex-grow: 1;
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(42px, 1fr) minmax(0, 1300px) minmax(42px, 1fr);
     align-items: center;
-    justify-content: center;
+    gap: 12px;
     padding: 10px 0;
     width: 100%;
 }
 
+.page-turn-button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    border-radius: 50%;
+    color: var(--text-secondary);
+    background: linear-gradient(145deg, rgba(36, 40, 62, 0.96), rgba(20, 22, 34, 0.96));
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32), inset 0 1px rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    z-index: 6;
+}
+
+.page-turn-button[hidden] {
+    display: none;
+}
+
+.page-turn-previous {
+    grid-column: 1;
+    justify-self: end;
+}
+
+.page-turn-next {
+    grid-column: 3;
+    justify-self: start;
+}
+
+.page-turn-button:hover {
+    color: var(--text-primary);
+    background: linear-gradient(145deg, rgba(239, 68, 68, 0.28), rgba(36, 40, 62, 0.96));
+    border-color: rgba(239, 68, 68, 0.65);
+    box-shadow: 0 0 20px var(--color-primary-glow), 0 8px 20px rgba(0, 0, 0, 0.35);
+    transform: scale(1.06);
+}
+
+.page-turn-button:active {
+    transform: scale(0.96);
+}
+
+.page-turn-button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
+}
+
 .binder-book {
+    grid-column: 2;
     display: flex;
     width: 100%;
     max-width: 1300px;
@@ -472,6 +552,33 @@ button, input, select {
     position: relative;
     padding: 12px;
     overflow: hidden;
+}
+
+.binder-book.page-turn-forward {
+    transform-origin: left center;
+    animation: binder-page-turn-forward 460ms ease-in-out;
+}
+
+.binder-book.page-turn-backward {
+    transform-origin: right center;
+    animation: binder-page-turn-backward 460ms ease-in-out;
+}
+
+@keyframes binder-page-turn-forward {
+    0%, 100% { transform: perspective(1400px) rotateY(0); filter: brightness(1); }
+    45% { transform: perspective(1400px) rotateY(-12deg); filter: brightness(0.78); }
+}
+
+@keyframes binder-page-turn-backward {
+    0%, 100% { transform: perspective(1400px) rotateY(0); filter: brightness(1); }
+    45% { transform: perspective(1400px) rotateY(12deg); filter: brightness(0.78); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .binder-book.page-turn-forward,
+    .binder-book.page-turn-backward {
+        animation: none;
+    }
 }
 
 .binder-page {
@@ -505,6 +612,14 @@ button, input, select {
     border-radius: 10px;
     border: 1px solid var(--border-color);
     align-self: center;
+}
+
+.left-page .page-number-banner {
+    align-self: flex-start;
+}
+
+.right-page .page-number-banner {
+    align-self: flex-end;
 }
 
 /* Central Binder Spine */
@@ -706,10 +821,14 @@ button, input, select {
 
 /* Placeholders */
 .card-placeholder-pokeball {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
     opacity: 0.15;
+    pointer-events: none;
 }
 
 .pokeball-circle {
@@ -869,7 +988,7 @@ button, input, select {
     background-color: var(--bg-input);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 10px 14px;
+    padding: 10px 38px 10px 14px;
     font-size: 13px;
     cursor: pointer;
 }
@@ -1126,10 +1245,42 @@ button, input, select {
     transition: var(--transition-fast);
 }
 
+.form-group select {
+    padding-right: 38px;
+}
+
 .form-group input:focus, .form-group select:focus {
     outline: none;
-    border-color: rgba(255, 255, 255, 0.2);
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+    border-color: rgba(239, 68, 68, 0.65);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+input[type="file"] {
+    width: 100%;
+    padding: 7px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+input[type="file"]::file-selector-button {
+    margin-right: 12px;
+    padding: 8px 14px;
+    border: 1px solid rgba(239, 68, 68, 0.38);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(239, 68, 68, 0.08));
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+input[type="file"]::file-selector-button:hover {
+    border-color: rgba(239, 68, 68, 0.7);
+    background-color: rgba(239, 68, 68, 0.2);
 }
 
 .form-row-2 {
@@ -1771,6 +1922,26 @@ button, input, select {
     
     .main-content {
         padding: 20px;
+    }
+
+    .section-actions {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .page-indicator-wrapper {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .binder-book-container {
+        grid-template-columns: 36px minmax(0, 1fr) 36px;
+        gap: 4px;
+    }
+
+    .page-turn-button {
+        width: 34px;
+        height: 34px;
     }
     
     .dashboard-header {

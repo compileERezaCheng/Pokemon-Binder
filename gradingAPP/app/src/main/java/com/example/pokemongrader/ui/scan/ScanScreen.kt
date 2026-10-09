@@ -71,6 +71,7 @@ enum class ScanSide {
 @Composable
 fun ScanScreen(
     repository: DataRepository,
+    onCardAdded: (Int) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -205,8 +206,9 @@ fun ScanScreen(
                                             resolvedCritique = ""
                                             resolvedDex = result.optInt("dex_number", 0)
                                             if (resolvedDex > 0) {
-                                                page = (((resolvedDex - 1) / 9) + 1).toString()
-                                                slot = (((resolvedDex - 1) % 9) + 1).toString()
+                                                val position = PokeApiClient.binderPosition(resolvedDex)
+                                                page = position.first.toString()
+                                                slot = position.second.toString()
                                             }
                                         } catch (e: Exception) {
                                             resolvedName = "Error"
@@ -259,8 +261,9 @@ fun ScanScreen(
                                     val dex = PokeApiClient.fetchDexNumber(it)
                                     if (dex > 0) {
                                         resolvedDex = dex
-                                        page = (((dex - 1) / 9) + 1).toString()
-                                        slot = (((dex - 1) % 9) + 1).toString()
+                                        val position = PokeApiClient.binderPosition(dex)
+                                        page = position.first.toString()
+                                        slot = position.second.toString()
                                     }
                                 }
                             }
@@ -269,8 +272,9 @@ fun ScanScreen(
                             val dex = it.toIntOrNull() ?: 0
                             resolvedDex = dex
                             if (dex > 0) {
-                                page = (((dex - 1) / 9) + 1).toString()
-                                slot = (((dex - 1) % 9) + 1).toString()
+                                val position = PokeApiClient.binderPosition(dex)
+                                page = position.first.toString()
+                                slot = position.second.toString()
                             }
                         },
                         onRarityChange = { resolvedRarity = it },
@@ -302,7 +306,7 @@ fun ScanScreen(
                                         critique = resolvedCritique
                                     )
                                 }
-                                repository.addCard(card)
+                                if (repository.addCard(card)) onCardAdded(card.page)
                                 onNavigateBack()
                             }
                         },
