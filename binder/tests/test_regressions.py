@@ -96,7 +96,13 @@ class BinderApiTests(TemporaryBinderTest):
         config = pokemon_binder.DEFAULT_CONFIG.copy()
         config.update({"firebase_user_id": "test-user", "username": "Test Trainer"})
         pokemon_binder.save_config(config)
+        self.server_data_patch = patch.object(pokemon_server, "DATA_DIR", str(self.data_dir))
+        self.server_data_patch.start()
+        self.addCleanup(self.server_data_patch.stop)
+        original_port = pokemon_server.PORT
+        self.addCleanup(setattr, pokemon_server, "PORT", original_port)
         self.httpd = pokemon_server.ThreadedHTTPServer(("127.0.0.1", 0), pokemon_server.BinderHTTPRequestHandler)
+        pokemon_server.PORT = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.stop_server)
@@ -296,7 +302,7 @@ class ServerLifecycleTests(TemporaryBinderTest):
                 patch("webbrowser.open") as default_browser:
             pokemon_server.launch_browser()
 
-        default_browser.assert_called_once_with(f"http://localhost:{pokemon_server.PORT}")
+        default_browser.assert_called_once_with(f"http://127.0.0.1:{pokemon_server.PORT}")
         edge_app.assert_not_called()
 
     def test_context_menu_uses_the_point_type_declared_for_get_cursor_pos(self):
@@ -374,6 +380,23 @@ class ServerLifecycleTests(TemporaryBinderTest):
         self.assertTrue(fake_server.closed)
         tray.assert_called_once()
         self.assertNotIn("monitor_heartbeat", started_targets)
+
+    def test_packaged_server_leaves_window_to_webview(self):
+        fake_server = Mock()
+        with patch.object(pokemon_server, "acquire_single_instance", return_value=True), \
+                patch.object(pokemon_binder, "load_pokemon_database", return_value={}), \
+                patch.object(pokemon_binder, "download_default_icon"), \
+                patch.object(pokemon_server, "ThreadedHTTPServer", return_value=fake_server), \
+                patch.object(pokemon_server, "SystemTrayIcon", create=True) as tray, \
+                patch.object(pokemon_server, "INSTANCE_TOKEN", "packaged-instance"), \
+                patch("threading.Thread") as thread, \
+                contextlib.redirect_stdout(io.StringIO()):
+            pokemon_server.main()
+
+        fake_server.serve_forever.assert_called_once()
+        fake_server.server_close.assert_called_once()
+        tray.assert_not_called()
+        thread.assert_not_called()
 
     def test_port_conflict_does_not_start_a_browser_or_leave_a_thread(self):
         started_targets = []

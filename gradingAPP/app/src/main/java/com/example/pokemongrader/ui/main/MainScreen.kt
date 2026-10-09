@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -34,6 +35,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -272,6 +276,9 @@ fun MainScreen(
     val profileImageBase64 by repository.profileImageBase64.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
+    val compact = LocalConfiguration.current.screenHeightDp < 500
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(currentPage) { gridState.scrollToItem(0) }
 
     // Filter and Sort states for Collection List
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -402,7 +409,7 @@ fun MainScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(if (compact) 6.dp else 16.dp))
 
                 if (activeTab == "binder") {
                     AnimatedContent(
@@ -413,26 +420,35 @@ fun MainScreen(
                                 (slideOutHorizontally(tween(250)) { -direction * it } + fadeOut(tween(180)))
                         },
                         label = "binder-page-turn",
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.weight(1f)
                     ) { page ->
-                        Column {
+                        Column(modifier = Modifier.fillMaxSize()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.Center,
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                TextButton(
+                                    onClick = { onCurrentPageChange(currentPage - 1) },
+                                    enabled = currentPage > 1
+                                ) { Text("Previous page") }
                                 Text("Page $page", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                TextButton(onClick = { onCurrentPageChange(currentPage + 1) }) { Text("Next page") }
                             }
+                            if (compact) Text("Scroll to see all 9 slots", color = Color.LightGray, fontSize = 11.sp)
 
                             var offsetX by remember { mutableStateOf(0f) }
 
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(3),
+                                state = gridState,
                                 contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier
-                                    .fillMaxSize()
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .semantics { contentDescription = "Binder slots" }
                                     .pointerInput(Unit) {
                                         detectHorizontalDragGestures(
                                             onDragEnd = {

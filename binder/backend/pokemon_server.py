@@ -37,13 +37,44 @@ else:
 DATA_DIR = pokemon_binder.DATA_DIR
 PORT = 8080
 _SINGLE_INSTANCE_HANDLE = None
+INSTANCE_TOKEN = os.environ.get('POKEMON_BINDER_INSTANCE', '')
+PUBLIC_SETTINGS = {
+    'rows', 'cols', 'mode', 'gsheet_enabled', 'gsheet_name', 'firebase_enabled',
+    'firebase_email', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
+    'cover_color', 'cover_featured_dex', 'cover_source', 'cover_image_url',
+    'cover_image_path', 'profile_picture_source', 'profile_featured_dex',
+    'profile_image_url', 'profile_image_path',
+}
+
+def public_settings(config):
+    return {key: config[key] for key in PUBLIC_SETTINGS if key in config}
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def allowed_request(self, write=False):
+        host = self.headers.get('Host', '')
+        origin = self.headers.get('Origin')
+        if host != f'127.0.0.1:{PORT}' or self.client_address[0] != '127.0.0.1':
+            self.send_error(403, 'Local access only')
+            return False
+        if origin and origin != f'http://127.0.0.1:{PORT}':
+            self.send_error(403, 'Unexpected origin')
+            return False
+        if write and self.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none'):
+            self.send_error(403, 'Unexpected origin')
+            return False
+        bodyless = {'/api/heartbeat', '/api/shutdown', '/api/sync', '/api/firebase/logout'}
+        if write and self.path not in bodyless and self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+            self.send_error(415, 'JSON required')
+            return False
+        return True
+
     def end_headers(self):
         # Call superclass end_headers directly. Caching headers are now managed on a per-response basis.
         super().end_headers()
 
     def do_GET(self):
+        if not self.allowed_request():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
@@ -82,7 +113,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(pokemon_binder.load_collection(), cache_age=0)
             
         elif path == '/api/settings':
-            self.send_json(pokemon_binder.load_config(), cache_age=0)
+            self.send_json(public_settings(pokemon_binder.load_config()), cache_age=0)
+        elif path == '/api/instance':
+            self.send_json({'instance': INSTANCE_TOKEN}, cache_age=0)
             
         elif path == '/api/pokemon-db':
             # Pokémon Dex Species Database is 50KB and static, cache for 1 day
@@ -96,6 +129,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "File Not Found")
 
     def do_POST(self):
+        if not self.allowed_request(write=True):
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         
@@ -245,7 +280,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 pokemon_binder.push_profile_to_firebase(config)
             except Exception:
                 pass
-        self.send_json({"success": True, "config": config})
+        self.send_json({"success": True, "config": public_settings(config)})
 
 
     def handle_upload_cover_image(self, data):
@@ -272,7 +307,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             config["cover_image_path"] = "cover_image.png"
             pokemon_binder.save_config(config)
             
-            self.send_json({"success": True, "config": config})
+            self.send_json({"success": True, "config": public_settings(config)})
         except Exception as e:
             self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
 
@@ -305,7 +340,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
             
-            self.send_json({"success": True, "config": config})
+            self.send_json({"success": True, "config": public_settings(config)})
         except Exception as e:
             self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
 
@@ -329,7 +364,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "success": True, 
                 "message": f"Login successful! {sync_msg}",
-                "config": pokemon_binder.load_config() # Reload to get updated user_id/token
+                "config": public_settings(pokemon_binder.load_config())
             })
         else:
             self.send_json({"success": False, "error": msg}, status=401)
@@ -346,9 +381,12 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
             return
             
+        dex_value = data.get("dex_id", 0)
+        if isinstance(dex_value, dict):
+            dex_value = dex_value.get("id", 0)
         try:
-            dex_id = int(data.get("dex_id", 0))
-        except ValueError:
+            dex_id = int(dex_value)
+        except (TypeError, ValueError):
             dex_id = 0
             
         try:
@@ -821,7 +859,7 @@ def launch_browser():
     ready = False
     for _ in range(max_retries):
         try:
-            conn = http.client.HTTPConnection("localhost", PORT)
+            conn = http.client.HTTPConnection("127.0.0.1", PORT)
             conn.request("GET", "/")
             res = conn.getresponse()
             if res.status == 200:
@@ -835,7 +873,7 @@ def launch_browser():
         return
 
     try:
-        webbrowser.open(f'http://localhost:{PORT}')
+        webbrowser.open(f'http://127.0.0.1:{PORT}')
     except Exception:
         pass
 
@@ -889,7 +927,7 @@ def main():
             return
 
         try:
-            httpd = ThreadedHTTPServer(("", PORT), BinderHTTPRequestHandler)
+            httpd = ThreadedHTTPServer(("127.0.0.1", PORT), BinderHTTPRequestHandler)
         except OSError as error:
             if error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10048:
                 show_startup_message(
@@ -908,20 +946,23 @@ def main():
         except Exception:
             pass
 
-        def open_browser():
-            threading.Thread(target=launch_browser, daemon=True).start()
+        # The packaged WebView owns the window; development mode keeps the tray/browser workflow.
+        if not INSTANCE_TOKEN:
+            def open_browser():
+                threading.Thread(target=launch_browser, daemon=True).start()
 
-        def exit_server():
-            threading.Thread(target=httpd.shutdown, daemon=True).start()
+            def exit_server():
+                threading.Thread(target=httpd.shutdown, daemon=True).start()
 
-        tray = SystemTrayIcon(open_browser, exit_server)
-        tray.start()
-        open_browser()
+            tray = SystemTrayIcon(open_browser, exit_server)
+            tray.start()
+            open_browser()
         
         print(f"\n=======================================================")
         print(f"   POKÉMON BINDER MANAGER WEB API SERVER")
-        print(f"   Running on http://localhost:{PORT}")
-        print(f"   Use the PokéBinder tray icon to reopen the binder or exit")
+        print(f"   Running on http://127.0.0.1:{PORT}")
+        if not INSTANCE_TOKEN:
+            print(f"   Use the PokéBinder tray icon to reopen the binder or exit")
         print(f"=======================================================\n")
         
         httpd.serve_forever()

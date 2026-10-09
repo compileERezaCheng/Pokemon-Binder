@@ -1,9 +1,11 @@
 package com.example.pokemongrader.ui.main
 
 import android.content.ComponentName
+import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -12,7 +14,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
@@ -21,6 +25,7 @@ import androidx.compose.ui.test.swipeRight
 import com.example.pokemongrader.MainActivity
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
+import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -211,6 +216,22 @@ class MainScreenTest {
   }
 
   @Test
+  fun compactLayoutCanReachLastSlot() {
+    fakeRepository = FakeDataRepository(emptyList())
+    composeTestRule.setContent {
+      val compact = Configuration(LocalConfiguration.current).apply { screenHeightDp = 400 }
+      CompositionLocalProvider(LocalConfiguration provides compact) {
+        StatefulMainScreen(fakeRepository, {}, { _, _, _ -> }, {})
+      }
+    }
+
+    composeTestRule.onNodeWithText("Scroll to see all 9 slots").assertExists()
+    composeTestRule.onNodeWithContentDescription("Binder slots").performScrollToIndex(8)
+    composeTestRule.onNodeWithText("Slot 9").assertExists()
+    composeTestRule.onNodeWithText("Next page").assertExists()
+  }
+
+  @Test
   fun mainActivityIsLockedToPortrait() {
     val activityInfo = composeTestRule.activity.packageManager.getActivityInfo(
       ComponentName(composeTestRule.activity, MainActivity::class.java),
@@ -267,16 +288,6 @@ private class FakeDataRepository(initialCards: List<Card>) : DataRepository {
 
   override var prefilledPage: Int? = null
   override var prefilledSlot: Int? = null
-
-  override suspend fun submitDatasetSample(
-    front: android.graphics.Bitmap?,
-    back: android.graphics.Bitmap?,
-    name: String,
-    set: String,
-    rarity: String,
-    grade: Double,
-    critique: String
-  ): Boolean = true
 
   override suspend fun login(email: String, password: String): Boolean = true
   override suspend fun register(email: String, password: String): Boolean = true

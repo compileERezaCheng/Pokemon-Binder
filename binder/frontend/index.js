@@ -141,14 +141,16 @@ async function loadPokemonDb() {
         if (res.ok) {
             const cacheData = await res.json();
             
-            // Cache format is { "name": ID, "ID": "name" }
-            // Filter names and map to an array
+            // Handle both legacy numeric IDs and entries shaped like { id, type }.
             const temp = [];
             for (const key in cacheData) {
                 if (isNaN(key)) {
+                    const value = cacheData[key];
+                    const id = Number(typeof value === "object" && value !== null ? value.id : value);
+                    if (!Number.isInteger(id) || id < 1) continue;
                     temp.push({
                         name: key,
-                        id: cacheData[key]
+                        id
                     });
                 }
             }
@@ -1670,7 +1672,7 @@ function getRarityClass(rarity) {
     if (r === "normal") return "Normal";
     if (r === "rare") return "Rare";
     if (r === "holo" || r === "holofoil rare" || r === "holofoil") return "Holo";
-    if (r === "reverse holo" || r === "reverse") return "Reverse";
+    if (r === "reverse" || r === "r holo" || r.startsWith("reverse ")) return "Reverse";
     if (r === "double rare" || r === "double") return "Double";
     if (r === "ultra rare" || r === "ultra") return "Ultra";
     if (r === "illustration rare" || r === "ilustration rare" || r === "illustration" || r === "ir") return "Illustration";
@@ -1691,7 +1693,7 @@ function getRarityAbbrev(rarity) {
     if (r === "normal") return "Normal";
     if (r === "rare") return "Rare";
     if (r === "holo" || r === "holofoil rare" || r === "holofoil") return "Holo";
-    if (r === "reverse holo" || r === "reverse") return "R Holo";
+    if (r === "reverse" || r === "r holo" || r.startsWith("reverse ")) return "R Holo";
     if (r === "double rare" || r === "double") return "DR";
     if (r === "ultra rare" || r === "ultra") return "UR";
     if (r === "secret rare" || r === "secret") return "SR";
@@ -1802,30 +1804,36 @@ async function logoutFirebasePC() {
 }
 
 function updateFirebaseUI(config) {
-    // --- Login Overlay control ---
+    // Firebase sign-in is optional; local collection access is always available.
     const overlay = document.getElementById('login-overlay');
-    if (overlay) {
-        if (config.firebase_enabled) {
-            overlay.classList.add('hidden');
-        } else {
-            overlay.classList.remove('hidden');
-        }
-    }
+    if (overlay) overlay.classList.add('hidden');
 
-    // --- Profile section firebase status ---
+    // --- Profile section Firebase controls ---
     const profileStatus = document.getElementById('profile-firebase-status');
+    const profileConnect = document.getElementById('profile-firebase-connect');
     const profileEmail = document.getElementById('profile-linked-email');
     if (profileStatus) {
         if (config.firebase_enabled) {
             profileStatus.classList.remove('hidden');
+            profileConnect?.classList.add('hidden');
             if (profileEmail) profileEmail.textContent = config.firebase_email || 'Active User';
         } else {
             profileStatus.classList.add('hidden');
+            profileConnect?.classList.remove('hidden');
         }
     }
 
     // --- Dashboard sync badge ---
     updateDashboardStats();
+}
+
+function showFirebaseLogin() {
+    document.getElementById('login-error')?.classList.add('hidden');
+    document.getElementById('login-overlay')?.classList.remove('hidden');
+}
+
+function continueLocalOnly() {
+    document.getElementById('login-overlay')?.classList.add('hidden');
 }
 
 // Login overlay submit (called by the overlay button)

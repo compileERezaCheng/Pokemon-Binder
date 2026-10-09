@@ -61,6 +61,7 @@ class ScanScreenTest {
                     allPokemonNames = emptyList(),
                     frontBitmap = if (isManual) null else bitmap,
                     backBitmap = back,
+                    saveError = "",
                     onNameChange = {},
                     onDexChange = {},
                     onRarityChange = {},
