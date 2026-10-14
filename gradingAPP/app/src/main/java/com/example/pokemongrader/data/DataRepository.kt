@@ -29,6 +29,7 @@ interface DataRepository {
     suspend fun login(email: String, password: String): Boolean
     suspend fun register(email: String, password: String): Boolean
     suspend fun addCard(card: Card): Boolean
+    suspend fun updateCard(card: Card): Boolean
     suspend fun removeCard(card: Card): Boolean
     suspend fun fetchRemote(): Boolean
     suspend fun refreshAndFetch(): Boolean
@@ -171,6 +172,26 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         }
     }
 
+    override suspend fun updateCard(card: Card): Boolean {
+        _isLoading.value = true
+        return try {
+            val uid = prefs.getString("uid", "") ?: ""
+            val token = prefs.getString("token", "") ?: ""
+            val current = _cards.value.toMutableList()
+            val index = current.indexOfFirst { it.copyId == card.copyId }
+            if (index < 0) return false
+            current[index] = card
+            FirebaseClient.saveCollection(uid, token, current)
+            _cards.value = current
+            true
+        } catch (e: Exception) {
+            _errorMessage.value = e.message
+            false
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
     override suspend fun removeCard(card: Card): Boolean {
         _isLoading.value = true
         return try {
@@ -180,7 +201,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
             val iterator = current.iterator()
             while (iterator.hasNext()) {
                 val c = iterator.next()
-                if (c.page == card.page && c.slot == card.slot && c.name.equals(card.name, ignoreCase = true) && c.type == card.type && c.condition == card.condition) {
+                if (c.copyId == card.copyId || (card.copyId.isBlank() && c.page == card.page && c.slot == card.slot && c.name.equals(card.name, ignoreCase = true) && c.type == card.type && c.condition == card.condition)) {
                     iterator.remove()
                     break
                 }

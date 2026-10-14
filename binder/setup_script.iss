@@ -19,16 +19,17 @@ SetupIconFile=data\pokeball.ico
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
-
 [Files]
-; The main application file from the dist folder
-Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Install the server that stays in the tray and opens the binder in the browser.
+Source: "dist\PokemonBinderServer\*"; DestDir: "{app}\PokemonBinderServer"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "data\pokeball.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+Type: files; Name: "{autodesktop}\Pokemon Binder Manager.lnk"
 
 [Icons]
-Name: "{group}\Pokemon Binder Manager"; Filename: "{app}\Pokemon Binder.exe"
-Name: "{autodesktop}\Pokemon Binder Manager"; Filename: "{app}\Pokemon Binder.exe"; Tasks: desktopicon
+Name: "{group}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; IconFilename: "{app}\pokeball.ico"
+Name: "{autodesktop}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; IconFilename: "{app}\pokeball.ico"
 
 [Run]
-Filename: "{app}\Pokemon Binder.exe"; Description: "{cm:LaunchProgram,Pokemon Binder Manager}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; Description: "{cm:LaunchProgram,Pokemon Binder Manager}"; Flags: nowait postinstall skipifsilent

@@ -42,7 +42,7 @@ fun MainNavigation(repository: DataRepository) {
           MainScreen(
             repository = repository,
             onNavigateToScan = { backStack.add(Scan) },
-            onNavigateToCardDetails = { page, slot, date -> backStack.add(CardDetails(page, slot, date)) },
+            onNavigateToCardDetails = { page, slot, date, copyId -> backStack.add(CardDetails(page, slot, date, copyId)) },
             onNavigateToAccountSettings = { backStack.add(AccountSettings) },
             activeTab = activeTab.value,
             onActiveTabChange = { activeTab.value = it },
@@ -67,6 +67,7 @@ fun MainNavigation(repository: DataRepository) {
             page = key.page,
             slot = key.slot,
             dateAdded = key.dateAdded,
+            copyId = key.copyId,
             repository = repository,
             onNavigateBack = { backStack.removeLastOrNull() },
             modifier = Modifier.safeDrawingPadding()

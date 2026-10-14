@@ -14,6 +14,8 @@ The **Android app** is designed for the modern collector, bringing your binder t
 *   **📍 Real-time Firebase Sync**: Every card you scan on your phone appears instantly in your PC binder.
 *   **🎨 Pro Profile Customization**: Set your trainer avatar using your **phone's gallery** with a built-in cropping tool, choose a featured Pokémon, or use an online URL.
 *   **📊 Advanced Collection Management**: Sorting by Dex number, Rarity, or Date. Filtering by rarity tiers and deduplication (Show Repeated toggle) matching the PC experience.
+*   **🗂️ Set and Printing Selection**: Search the TCGdex catalog and choose the exact set and card printing when adding or grading a card.
+*   **🏅 Grading Summary and Rank**: Review the condition breakdown and estimated card rank alongside the grade.
 *   **✍️ Manual Entry Mode**: Skip the AI and enter card details manually if you're in a hurry or scanning custom cards.
 
 ---
@@ -58,8 +60,10 @@ A highly visual,immersive digital card album manager for your desktop.
 
 To modify the PC logic or rebuild the executable:
 1. Install dependencies: `pip install pyinstaller gspread google-auth`
-2. Run the PyInstaller build:
+2. Run the Windows build script from the `binder` folder:
    ```bash
-   python -m PyInstaller "Pokemon Binder.spec" --noconfirm
+   .\build.ps1
    ```
-3. The resulting `.exe` will be in the `dist/` folder.
+3. The server executable will be in `binder/dist/PokemonBinderServer/`.
+
+The Android app source is in `gradingAPP/`. Build and install it from Android Studio or with the Gradle wrapper; APK availability depends on the published GitHub release.

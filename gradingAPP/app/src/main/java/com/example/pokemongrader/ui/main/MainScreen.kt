@@ -194,33 +194,39 @@ fun String.capitalize(): String {
 @Composable
 fun AsyncImage(
     url: String,
-    contentDescription: String?,
-    modifier: Modifier = Modifier
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    fallbackUrl: String? = null
 ) {
-    var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(url, fallbackUrl) { mutableStateOf<Bitmap?>(null) }
 
-    LaunchedEffect(url) {
-        withContext(Dispatchers.IO) {
-            try {
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.doInput = true
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.connect()
-                val input: InputStream = conn.inputStream
-                bitmap = BitmapFactory.decodeStream(input)
-            } catch (e: Exception) {
-                e.printStackTrace()
+    LaunchedEffect(url, fallbackUrl) {
+        bitmap = withContext(Dispatchers.IO) {
+            var loaded: Bitmap? = null
+            listOfNotNull(url, fallbackUrl).distinct().forEach { source ->
+                if (loaded == null) {
+                    try {
+                        val conn = URL(source).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        try {
+                            if (conn.responseCode in 200..299) {
+                                conn.inputStream.use { loaded = BitmapFactory.decodeStream(it) }
+                            }
+                        } finally {
+                            conn.disconnect()
+                        }
+                    } catch (_: Exception) {
+                        loaded = null
+                    }
+                }
             }
+            loaded
         }
     }
 
     if (bitmap != null) {
-        Image(
-            bitmap = bitmap!!.asImageBitmap(),
-            contentDescription = contentDescription,
-            modifier = modifier
-        )
+        Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = contentDescription, modifier = modifier)
     } else {
         Box(modifier = modifier.background(Color.DarkGray))
     }
@@ -259,7 +265,7 @@ fun ProfileImage(
 fun MainScreen(
     repository: DataRepository,
     onNavigateToScan: () -> Unit,
-    onNavigateToCardDetails: (Int, Int, String) -> Unit,
+    onNavigateToCardDetails: (Int, Int, String, String) -> Unit,
     onNavigateToAccountSettings: () -> Unit,
     activeTab: String,
     onActiveTabChange: (String) -> Unit,
@@ -475,7 +481,7 @@ fun MainScreen(
                                         onClick = {
                                             if (pocketCards.isNotEmpty()) {
                                                 val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
-                                                onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded)
+                                                onNavigateToCardDetails(topCard.page, topCard.slot, topCard.dateAdded, topCard.copyId)
                                             } else {
                                                 repository.prefilledPage = page
                                                 repository.prefilledSlot = slotIndex
@@ -595,7 +601,7 @@ fun MainScreen(
                             items(filteredCards) { card ->
                                 CollectionRow(
                                     card = card,
-                                    onClick = { onNavigateToCardDetails(card.page, card.slot, card.dateAdded) }
+                                    onClick = { onNavigateToCardDetails(card.page, card.slot, card.dateAdded, card.copyId) }
                                 )
                             }
                         }
@@ -668,7 +674,7 @@ fun PocketCell(
             .padding(4.dp)
     ) {
         if (topCard != null) {
-            val imageUrl = if (topCard.dexNumber > 0) {
+            val imageUrl = topCard.imageUrl.takeIf { it.startsWith("https://assets.tcgdex.net/") } ?: if (topCard.dexNumber > 0) {
                 "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${topCard.dexNumber}.png"
             } else ""
 
@@ -803,7 +809,7 @@ fun CollectionRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val imageUrl = if (card.dexNumber > 0) {
+            val imageUrl = card.imageUrl.takeIf { it.startsWith("https://assets.tcgdex.net/") } ?: if (card.dexNumber > 0) {
                 "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${card.dexNumber}.png"
             } else ""
 

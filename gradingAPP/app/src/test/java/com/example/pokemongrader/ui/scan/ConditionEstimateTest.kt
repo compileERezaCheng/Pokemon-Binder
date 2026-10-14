@@ -33,4 +33,17 @@ class ConditionEstimateTest {
         }
         assertThrows(Exception::class.java) { parseConditionEstimate(JSONObject("""{"assessable":true,"grade":7}""")) }
     }
+
+    @Test fun validEstimateKeepsStructuredCriteria() {
+        val result = parseConditionEstimate(JSONObject(valid))
+        val getter = result.javaClass.methods.singleOrNull { it.name == "getCriteriaJson" }
+        assertEquals(true, getter != null)
+        val criteria = JSONObject(getter!!.invoke(result) as String)
+        assertEquals(8.0, criteria.getJSONObject("centering").getDouble("score"), 0.0)
+        assertEquals("left border narrower", criteria.getJSONObject("centering").getString("evidence"))
+    }
+
+    @Test fun copyrightYearDoesNotMakeCardUnassessable() {
+        assert(CONDITION_ESTIMATE_PROMPT.contains("Do not use copyright year"))
+    }
 }

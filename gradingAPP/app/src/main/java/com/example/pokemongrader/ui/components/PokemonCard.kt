@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.pokemongrader.data.Card
+import com.example.pokemongrader.data.CardRank
 import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.getRarityColor
 import com.example.pokemongrader.ui.main.capitalize
@@ -40,8 +41,19 @@ fun PokemonCard(
     val rarity = card.type.lowercase()
     val isHolo = rarity.contains("holo") || rarity.contains("foil") || rarity.contains("rare")
     val isFullArt = rarity.contains("special") || rarity.contains("illustration") || rarity.contains("hyper") || rarity.contains("secret")
-    
     val accentColor = getRarityColor(card.type)
+    val rank = CardRank.calculate(card.grade.takeIf { it > 0.0 }, card.catalogRarity)
+    val rankColor = when (rank) {
+        "Bronze" -> Color(0xFFB77946)
+        "Silver" -> Color(0xFF94A3B8)
+        "Gold" -> Color(0xFFEAB308)
+        "Platinum" -> Color(0xFF38BDF8)
+        "Diamond" -> Color(0xFFA78BFA)
+        else -> Color.Gray
+    }
+    val speciesImage = if (card.dexNumber > 0) "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/" + card.dexNumber + ".png" else null
+    val catalogImage = card.imageUrl.takeIf { it.startsWith("https://assets.tcgdex.net/") }
+    val image = catalogImage ?: speciesImage
 
     Box(
         modifier = modifier
@@ -50,7 +62,6 @@ fun PokemonCard(
             .background(Color(0xFF1E293B))
             .border(2.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
     ) {
-        // Holographic Shimmer Layer
         if (isHolo || isFullArt) {
             Box(
                 modifier = Modifier
@@ -59,11 +70,8 @@ fun PokemonCard(
                         drawContent()
                         val brush = Brush.linearGradient(
                             colors = listOf(
-                                Color.Transparent,
-                                Color.White.copy(alpha = 0.2f),
-                                Color.White.copy(alpha = 0.5f),
-                                Color.White.copy(alpha = 0.2f),
-                                Color.Transparent
+                                Color.Transparent, Color.White.copy(alpha = 0.2f), Color.White.copy(alpha = 0.5f),
+                                Color.White.copy(alpha = 0.2f), Color.Transparent
                             ),
                             start = Offset(size.width * sweepProgress, 0f),
                             end = Offset(size.width * (sweepProgress + 0.5f), size.height)
@@ -74,28 +82,17 @@ fun PokemonCard(
         }
 
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = card.name.capitalize(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
-                )
-                Text(
-                    text = if (card.dexNumber > 0) "#${String.format("%03d", card.dexNumber)}" else "Custom",
-                    color = Color.LightGray,
-                    fontSize = 14.sp
-                )
+                Text(card.name.capitalize(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text(if (card.dexNumber > 0) "#" + String.format("%03d", card.dexNumber) else "Custom", color = Color.LightGray, fontSize = 14.sp)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Artwork
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -105,10 +102,11 @@ fun PokemonCard(
                     .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                if (card.dexNumber > 0) {
+                if (image != null) {
                     AsyncImage(
-                        url = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${card.dexNumber}.png",
-                        contentDescription = card.name,
+                        url = image,
+                        fallbackUrl = if (catalogImage != null) speciesImage else null,
+                        contentDescription = card.name + " card",
                         modifier = Modifier.fillMaxSize().padding(16.dp)
                     )
                 } else {
@@ -118,31 +116,23 @@ fun PokemonCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Footer / Details
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(accentColor)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = card.type,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Box(
+                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(accentColor)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(card.type, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (rank != "No Rank") {
+                        Text(rank + " rank", color = rankColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
-                Text(
-                    text = card.condition,
-                    color = Color.LightGray,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(card.condition, color = Color.LightGray, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

@@ -4,6 +4,7 @@ import csv
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import shutil
 from datetime import datetime
 
@@ -61,6 +62,9 @@ CONFIG_FILE = os.path.join(DATA_DIR, "binder_config.json")
 DATA_FILE = os.path.join(DATA_DIR, "pokemon_binder.csv")
 CACHE_FILE = os.path.join(DATA_DIR, "pokemon_cache.json")
 SYNC_STATE_FILE = os.path.join(DATA_DIR, "sync_state.json")
+POKEMON_SPECIES_URL = "https://pokeapi.co/api/v2/pokemon-species/?limit=1000"
+# shortcut: fixed at the current 1025 species; raise when the National Dex grows.
+NATIONAL_DEX_SIZE = 1025
 
 def load_sync_state():
     if os.path.exists(SYNC_STATE_FILE):
@@ -186,32 +190,129 @@ def get_gen1_fallback():
         db[str(dex_id)] = {"name": name, "type": p_type}
     return db
 
-def load_pokemon_database():
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-
-    print(f"{CLR_INFO}[i] Initializing Pokémon species database with types...{CLR_RESET}")
-    print("    (Fetching from high-speed mirror to enable offline type backgrounds.)")
-
+def _pokemon_cache_id(value):
+    value = value.get("id") if isinstance(value, dict) else value
     try:
-        # Use a more comprehensive data source that includes types to avoid 1025 API calls
-        url = "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon.csv"
-        # Since CSV parsing of the full database is complex, let's use a simpler JSON mirror if possible
-        # Or just fetch the species list and assume types for now, but better to have a proper map.
-        # Fallback to a pre-generated map for common types
-        db = get_gen1_fallback() # Start with gen1
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
-        # In a real scenario, we'd fetch a full mapping. For now, let's stick to gen1 + expanded logic in JS
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+
+def _pokemon_cache_is_complete(db):
+    if not isinstance(db, dict):
+        return False
+    ids = {
+        _pokemon_cache_id(value)
+        for name, value in db.items()
+        if not name.isdigit()
+    }
+    return all(dex_id in ids for dex_id in range(1, NATIONAL_DEX_SIZE + 1))
+
+
+def _pokemon_cache_types(db):
+    types = {}
+    for key, value in db.items():
+        if not isinstance(value, dict) or not value.get("type"):
+            continue
+        name = value.get("name") if key.isdigit() else key
+        if isinstance(name, str):
+            types[name] = value["type"]
+    return types
+
+
+def _download_pokemon_species():
+    url = POKEMON_SPECIES_URL
+    pages = set()
+    species = []
+    expected_count = None
+    while url:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https" or parsed.hostname != "pokeapi.co" or parsed.path.rstrip("/") != "/api/v2/pokemon-species":
+            raise ValueError("PokéAPI returned an invalid species page URL")
+        if url in pages:
+            raise ValueError("PokéAPI repeated a species page")
+        pages.add(url)
+        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            page = json.loads(response.read().decode("utf-8"))
+        if not isinstance(page, dict) or not isinstance(page.get("results"), list):
+            raise ValueError("PokéAPI returned an invalid species page")
+        count = page.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < NATIONAL_DEX_SIZE:
+            raise ValueError("PokéAPI returned an incomplete National Pokédex")
+        if expected_count is not None and count != expected_count:
+            raise ValueError("PokéAPI species count changed during download")
+        expected_count = count
+        species.extend(page["results"])
+        next_url = page.get("next")
+        if next_url is not None and not isinstance(next_url, str):
+            raise ValueError("PokéAPI returned an invalid next page")
+        url = next_url
+
+    records = {}
+    names = set()
+    for item in species:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise ValueError("PokéAPI returned an invalid species")
+        item_url = urllib.parse.urlsplit(item.get("url", ""))
+        if item_url.scheme != "https" or item_url.hostname != "pokeapi.co" or item_url.path.rstrip("/").rsplit("/", 1)[0] != "/api/v2/pokemon-species":
+            raise ValueError("PokéAPI returned a non-species resource")
+        dex_id = int(item_url.path.rstrip("/").rsplit("/", 1)[-1])
+        if dex_id < 1 or dex_id in records or item["name"] in names:
+            raise ValueError("PokéAPI returned duplicate species")
+        records[dex_id] = {"name": item["name"]}
+        names.add(item["name"])
+    if len(records) != expected_count or set(records) != set(range(1, expected_count + 1)):
+        raise ValueError("PokéAPI species list is incomplete")
+    return records
+
+
+def _save_pokemon_database(db):
+    temporary_file = CACHE_FILE + ".tmp"
+    try:
+        with open(temporary_file, "w", encoding="utf-8") as f:
             json.dump(db, f, indent=4)
+        os.replace(temporary_file, CACHE_FILE)
+    finally:
+        if os.path.exists(temporary_file):
+            os.remove(temporary_file)
+
+
+def load_pokemon_database():
+    cached_db = None
+    cache_paths = [CACHE_FILE, get_resource_path(os.path.join("data", "pokemon_cache.json"))]
+    for path in dict.fromkeys(cache_paths):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                candidate = json.load(f)
+            if isinstance(candidate, dict):
+                cached_db = candidate
+                break
+        except (OSError, ValueError):
+            continue
+    if _pokemon_cache_is_complete(cached_db):
+        return cached_db
+
+    print(f"{CLR_INFO}[i] Loading the National Pokédex species database...{CLR_RESET}")
+    try:
+        species = _download_pokemon_species()
+        known_types = _pokemon_cache_types(cached_db or {})
+        db = {}
+        for dex_id, item in species.items():
+            name = item["name"]
+            entry = {"id": dex_id}
+            if name in known_types:
+                entry["type"] = known_types[name]
+            db[name] = entry
+            reverse_entry = {"name": name}
+            if "type" in entry:
+                reverse_entry["type"] = entry["type"]
+            db[str(dex_id)] = reverse_entry
+        _save_pokemon_database(db)
         return db
     except Exception as e:
-        print(f"{CLR_WARNING}[!] Warning: Could not initialize database ({e}).{CLR_RESET}")
-        return get_gen1_fallback()
+        print(f"{CLR_WARNING}[!] Warning: Could not update database ({e}).{CLR_RESET}")
+        return cached_db if cached_db is not None else get_gen1_fallback()
 def download_default_icon():
     icon_path = os.path.join(DATA_DIR, "pokeball.ico")
     if not os.path.exists(icon_path):
@@ -242,14 +343,15 @@ def find_pokemon(query, db):
     # Check exact match (name or ID)
     if query in db:
         if query.isdigit():
-            return int(query), db[query]
+            value = db[query]
+            return int(query), value.get("name") if isinstance(value, dict) else value
         else:
-            return db[query], query
+            return _pokemon_cache_id(db[query]), query
             
     # Try partial name matching in cached db
     matches = [name for name in db.keys() if not name.isdigit() and query in name]
     if len(matches) == 1:
-        return db[matches[0]], matches[0]
+        return _pokemon_cache_id(db[matches[0]]), matches[0]
     elif len(matches) > 1:
         return "multiple", sorted(matches)
         
@@ -263,10 +365,9 @@ def find_pokemon(query, db):
             dex_id = data["id"]
             
             # Update cache
-            db[name] = dex_id
-            db[str(dex_id)] = name
-            with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(db, f, indent=4)
+            db[name] = {"id": dex_id}
+            db[str(dex_id)] = {"name": name}
+            _save_pokemon_database(db)
             return dex_id, name
     except Exception:
         pass
@@ -315,6 +416,8 @@ def save_config(config):
     except Exception as e:
         print(f"{CLR_FAIL}[!] Error saving configuration: {e}{CLR_RESET}")
 
+COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details"]
+
 def load_collection():
     collection = []
     migration_needed = False
@@ -326,12 +429,19 @@ def load_collection():
                 has_type_column = "Type" in reader.fieldnames if reader.fieldnames else False
                 if not has_type_column:
                     migration_needed = True
+                if reader.fieldnames and any(field not in reader.fieldnames for field in COLLECTION_FIELDS):
+                    migration_needed = True
                 
                 for row in reader:
                     # Parse numerical fields safely
                     row["Page"] = int(row["Page"])
                     row["Slot"] = int(row["Slot"])
                     row["Dex Number"] = int(row["Dex Number"]) if row["Dex Number"] else 0
+                    if not row.get("Image URL"):
+                        row.pop("Image URL", None)
+                    for field in COLLECTION_FIELDS[9:]:
+                        if not row.get(field):
+                            row.pop(field, None)
                     
                     # Ensure Type column exists
                     if "Type" not in row or row["Type"] is None:
@@ -394,7 +504,7 @@ def load_collection():
     return collection
 
 def save_collection(collection):
-    fieldnames = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added"]
+    fieldnames = COLLECTION_FIELDS
     try:
         with open(DATA_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -408,9 +518,16 @@ def save_collection(collection):
         return False
 
 def add_card_to_csv(card):
-    fieldnames = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added"]
+    fieldnames = COLLECTION_FIELDS
     file_exists = os.path.exists(DATA_FILE)
     try:
+        if file_exists:
+            with open(DATA_FILE, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames or any(field not in reader.fieldnames for field in fieldnames):
+                    collection = load_collection()
+                    collection.append(card)
+                    return save_collection(collection)
         with open(DATA_FILE, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             if not file_exists:
@@ -481,11 +598,14 @@ def sync_with_google_sheets(config, collection):
         try:
             worksheet = sh.worksheet("Binder Collection")
         except Exception:
-            worksheet = sh.add_worksheet(title="Binder Collection", rows="1000", cols="8")
+            worksheet = sh.add_worksheet(title="Binder Collection", rows="1000", cols=str(len(COLLECTION_FIELDS)))
             
         # Write headers
-        headers = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added"]
+        headers = COLLECTION_FIELDS
         
+        if worksheet.col_count < len(headers):
+            worksheet.resize(cols=len(headers))
+
         # Assemble rows
         rows_to_write = []
         for card in collection:
@@ -497,7 +617,16 @@ def sync_with_google_sheets(config, collection):
                 card.get("Type", "Normal"),
                 card["Condition"],
                 card["Notes"] or "",
-                card["Date Added"]
+                card["Date Added"],
+                card.get("Image URL", ""),
+                card.get("Copy ID", ""),
+                card.get("Catalog Card ID", ""),
+                card.get("Set ID", ""),
+                card.get("Set Name", ""),
+                card.get("Card Number", ""),
+                card.get("Catalog Rarity", ""),
+                card.get("Grade", ""),
+                card.get("Grade Details", "")
             ])
             
         worksheet.clear()
@@ -824,7 +953,13 @@ def sync_with_firebase(config, collection):
             if v is None: return ""
             return str(v).lower().strip()
 
+        copy_id = safe_str(c.get("Copy ID"))
+        if copy_id:
+            return ("copy", copy_id)
+
         return (
+            safe_str(c.get("Catalog Card ID")),
+            safe_str(c.get("Set ID")),
             to_int(c.get("Page"), 1),
             to_int(c.get("Slot"), 1),
             to_int(c.get("Dex Number"), 0),
@@ -1127,12 +1262,12 @@ def add_card_interactive(db, config):
     if dex_id == "multiple":
         print(f"\n{CLR_WARNING}[?] Multiple matches found:{CLR_RESET}")
         for i, match in enumerate(name, 1):
-            print(f"  {i}. {match.capitalize()} (#{db[match]})")
+            print(f"  {i}. {match.capitalize()} (#{_pokemon_cache_id(db[match])})")
         
         choice = input("\nChoose a number (or 'c' to cancel): ").strip()
         if choice.isdigit() and 1 <= int(choice) <= len(name):
             selected_name = name[int(choice) - 1]
-            dex_id = db[selected_name]
+            dex_id = _pokemon_cache_id(db[selected_name])
             name = selected_name
         else:
             print("Cancelled.")

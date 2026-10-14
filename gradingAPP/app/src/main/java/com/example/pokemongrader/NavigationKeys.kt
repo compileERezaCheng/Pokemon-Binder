@@ -8,4 +8,4 @@ import kotlinx.serialization.Serializable
 @Serializable data object Scan : NavKey
 @Serializable data object AccountSettings : NavKey
 @Serializable data object ProfileEdit : NavKey
-@Serializable data class CardDetails(val page: Int, val slot: Int, val dateAdded: String) : NavKey
+@Serializable data class CardDetails(val page: Int, val slot: Int, val dateAdded: String, val copyId: String = "") : NavKey

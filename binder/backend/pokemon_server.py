@@ -5,6 +5,8 @@ import errno
 import os
 import sys
 import urllib.parse
+import math
+import uuid
 from datetime import datetime
 
 # Add the current directory to sys.path so we can import local modules
@@ -48,6 +50,13 @@ PUBLIC_SETTINGS = {
 
 def public_settings(config):
     return {key: config[key] for key in PUBLIC_SETTINGS if key in config}
+
+def valid_catalog_image_url(value):
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+        return parsed.scheme == "https" and parsed.hostname == "assets.tcgdex.net" and parsed.port in (None, 443) and not parsed.username and not parsed.password and parsed.path.startswith("/")
+    except ValueError:
+        return False
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def allowed_request(self, write=False):
@@ -102,11 +111,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # If no custom profile photo, serve the cover image as fallback
                 self.serve_file(os.path.join(INTERNAL_DATA_DIR, 'cover_image.png'), 'image/png')
         elif path == '/favicon.ico':
-            # Try to serve from external data first, fallback to internal
-            ico_path = os.path.join(DATA_DIR, 'pokeball.ico')
-            if not os.path.exists(ico_path):
-                ico_path = os.path.join(INTERNAL_DATA_DIR, 'pokeball.ico')
-            self.serve_file(ico_path, 'image/x-icon', cache_age=86400)
+            self.serve_file(os.path.join(INTERNAL_DATA_DIR, 'pokeball.ico'), 'image/x-icon', cache_age=0)
+        elif path == '/pokemon.png':
+            self.serve_file(os.path.join(INTERNAL_DATA_DIR, 'pokemon.png'), 'image/png', cache_age=86400)
             
         # API Endpoints
         elif path == '/api/collection':
@@ -118,9 +125,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({'instance': INSTANCE_TOKEN}, cache_age=0)
             
         elif path == '/api/pokemon-db':
-            # Pokémon Dex Species Database is 50KB and static, cache for 1 day
             db = pokemon_binder.load_pokemon_database()
-            self.send_json(db, cache_age=86400)
+            self.send_json(db, cache_age=0)
             
         elif path == '/api/suggest-position':
             self.handle_suggest_position(query)
@@ -148,6 +154,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.handle_save_settings(data)
         elif path == '/api/add':
             self.handle_add_card(data)
+        elif path == '/api/update-card':
+            self.handle_update_card(data)
         elif path == '/api/remove':
             self.handle_remove_card(data)
         elif path == '/api/sync':
@@ -404,6 +412,38 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             
         notes = data.get("notes", "").strip()
         card_type = data.get("type", "Normal").strip()
+        image_url = data.get("image_url", "").strip()
+        catalog_fields = {
+            "Catalog Card ID": str(data.get("catalog_card_id") or "").strip(),
+            "Set ID": str(data.get("set_id") or "").strip(),
+            "Set Name": str(data.get("set_name") or "").strip(),
+            "Card Number": str(data.get("card_number") or "").strip(),
+            "Catalog Rarity": str(data.get("catalog_rarity") or "").strip(),
+            "Image URL": image_url if valid_catalog_image_url(image_url) else "",
+        }
+        raw_grade = data.get("grade")
+        if isinstance(raw_grade, bool):
+            self.send_json({"success": False, "error": "Grade must be between 1 and 10"}, status=400)
+            return
+        if raw_grade not in (None, ""):
+            try:
+                grade = float(raw_grade)
+                if not math.isfinite(grade) or not 1 <= grade <= 10:
+                    raise ValueError
+            except (TypeError, ValueError):
+                self.send_json({"success": False, "error": "Grade must be between 1 and 10"}, status=400)
+                return
+        else:
+            grade = ""
+        raw_details = data.get("grade_details")
+        grade_details = raw_details if isinstance(raw_details, str) else json.dumps(raw_details, ensure_ascii=False) if raw_details is not None else ""
+        if grade_details:
+            try:
+                if not isinstance(json.loads(grade_details), dict):
+                    raise ValueError
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"success": False, "error": "Grade details must be a JSON object"}, status=400)
+                return
         
         # Create card dictionary
         new_card = {
@@ -414,7 +454,11 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             "Type": card_type,
             "Condition": condition,
             "Notes": notes,
-            "Date Added": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "Date Added": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Copy ID": str(uuid.uuid4()),
+            "Grade": str(grade) if grade else "",
+            "Grade Details": grade_details,
+            **catalog_fields
         }
         
         # Save to local CSV file
@@ -447,6 +491,53 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"success": False, "error": "Could not write card to local CSV database"}, status=500)
 
+    def handle_update_card(self, data):
+        collection = pokemon_binder.load_collection()
+        copy_id = str(data.get("copy_id") or "").strip()
+        matches = [card for card in collection if copy_id and card.get("Copy ID") == copy_id]
+        if not copy_id:
+            try:
+                page, slot = int(data.get("page")), int(data.get("slot"))
+                name = str(data.get("name") or "").strip().lower()
+                date_added = str(data.get("date_added") or "").strip()
+            except (TypeError, ValueError):
+                self.send_json({"success": False, "error": "Missing card identity"}, status=400)
+                return
+            matches = [
+                card for card in collection
+                if card["Page"] == page and card["Slot"] == slot and card["Name"].lower() == name
+                and (not date_added or card.get("Date Added", "").strip() == date_added)
+            ]
+        if len(matches) != 1:
+            self.send_json({"success": False, "error": "Card not found or identity is ambiguous"}, status=404)
+            return
+
+        card = matches[0]
+        image_url = str(data.get("image_url") or "").strip()
+        card.update({
+            "Catalog Card ID": str(data.get("catalog_card_id") or "").strip(),
+            "Set ID": str(data.get("set_id") or "").strip(),
+            "Set Name": str(data.get("set_name") or "").strip(),
+            "Card Number": str(data.get("card_number") or "").strip(),
+            "Catalog Rarity": str(data.get("catalog_rarity") or "").strip(),
+            "Image URL": image_url if valid_catalog_image_url(image_url) else "",
+        })
+        if pokemon_binder.save_collection(collection):
+            config = pokemon_binder.load_config()
+            gsheet_success, gsheet_msg = True, ""
+            firebase_success, firebase_msg = True, ""
+            if config.get("gsheet_enabled"):
+                gsheet_success, gsheet_msg = pokemon_binder.sync_with_google_sheets(config, collection)
+            if config.get("firebase_enabled"):
+                firebase_success, firebase_msg = pokemon_binder.sync_with_firebase(config, collection)
+            self.send_json({
+                "success": True, "card": card,
+                "gsheet_synced": config.get("gsheet_enabled"), "gsheet_success": gsheet_success, "gsheet_message": gsheet_msg,
+                "firebase_synced": config.get("firebase_enabled"), "firebase_success": firebase_success, "firebase_message": firebase_msg
+            })
+        else:
+            self.send_json({"success": False, "error": "Could not update card in local CSV database"}, status=500)
+
     def handle_remove_card(self, data):
         # We need to know which card to remove.
         # Removing by page, slot, name, and optionally date_added makes it specific.
@@ -455,6 +546,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             slot = int(data.get("slot"))
             name = data.get("name", "").strip().lower()
             date_added = data.get("date_added", "").strip()
+            copy_id = str(data.get("copy_id") or "").strip()
         except (ValueError, TypeError):
             self.send_json({"success": False, "error": "Missing or invalid Page/Slot specifications"}, status=400)
             return
@@ -462,15 +554,18 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         collection = pokemon_binder.load_collection()
         found_idx = -1
         
-        # Look for matching card
-        for idx, card in enumerate(collection):
-            if card["Page"] == page and card["Slot"] == slot and card["Name"].lower() == name:
-                if date_added and card.get("Date Added", "").strip() != date_added:
-                    continue
-                found_idx = idx
-                break
+        # Prefer the stable per-copy ID; older records use their legacy location tuple.
+        if copy_id:
+            found_idx = next((idx for idx, card in enumerate(collection) if card.get("Copy ID") == copy_id), -1)
+        else:
+            for idx, card in enumerate(collection):
+                if card["Page"] == page and card["Slot"] == slot and card["Name"].lower() == name:
+                    if date_added and card.get("Date Added", "").strip() != date_added:
+                        continue
+                    found_idx = idx
+                    break
                 
-        if found_idx == -1:
+        if found_idx == -1 and not copy_id:
             # Fallback to page and slot only if name matches partially or is empty
             for idx, card in enumerate(collection):
                 if card["Page"] == page and card["Slot"] == slot:
@@ -602,6 +697,8 @@ class SystemTrayIcon:
     WM_NULL = 0x0000
     NIM_ADD = 0x00000000
     NIM_DELETE = 0x00000002
+    NIM_SETVERSION = 0x00000004
+    NOTIFYICON_VERSION_4 = 4
     NIF_MESSAGE = 0x00000001
     NIF_ICON = 0x00000002
     NIF_TIP = 0x00000004
@@ -794,6 +891,8 @@ class SystemTrayIcon:
         import ctypes
         if self._shell.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(self._notify_data)):
             self._added = True
+            self._notify_data.uTimeoutOrVersion = self.NOTIFYICON_VERSION_4
+            self._shell.Shell_NotifyIconW(self.NIM_SETVERSION, ctypes.byref(self._notify_data))
         else:
             import ctypes
             raise ctypes.WinError(ctypes.get_last_error())
@@ -809,9 +908,10 @@ class SystemTrayIcon:
             self._add_icon()
             return 0
         if message == self.WM_TRAY:
-            if lparam == self.WM_LBUTTONDBLCLK:
+            event = lparam & 0xFFFF
+            if event == self.WM_LBUTTONDBLCLK:
                 self.on_open()
-            elif lparam in (self.WM_RBUTTONUP, self.WM_CONTEXTMENU):
+            elif event in (self.WM_RBUTTONUP, self.WM_CONTEXTMENU):
                 self._show_menu(hwnd)
             return 0
         if message == self.WM_CLOSE:

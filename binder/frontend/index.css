@@ -126,18 +126,13 @@ select option {
     border-bottom: 1px solid var(--border-color);
 }
 
-.pokeball-icon-container {
-    color: var(--color-primary);
+.pokemon-icon-container {
     filter: drop-shadow(0 0 6px var(--color-primary-glow));
 }
 
-.pokeball-svg {
-    animation: rotate 15s linear infinite;
-}
-
-@keyframes rotate {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+.pokemon-brand-icon {
+    display: block;
+    object-fit: contain;
 }
 
 .logo-area h2 {
@@ -1189,6 +1184,83 @@ select option {
 
 .hidden {
     display: none !important;
+}
+
+.catalog-options {
+    display: grid;
+    gap: 8px;
+    max-height: 360px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+.catalog-option {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 10px;
+    color: var(--text-primary);
+    text-align: left;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+.catalog-option:hover, .catalog-option[aria-selected="true"] {
+    border-color: rgba(239, 68, 68, 0.7);
+}
+.catalog-option:focus-visible {
+    outline: 2px solid rgba(239, 68, 68, 0.8);
+    outline-offset: 2px;
+}
+.catalog-option img {
+    flex: 0 0 80px;
+    width: 80px;
+    height: 112px;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+.catalog-option-copy {
+    display: grid;
+    min-width: 0;
+    gap: 6px;
+}
+.catalog-option-copy strong {
+    font-size: 14px;
+    line-height: 1.3;
+}
+.grade-summary, .grade-criteria {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+.grade-criteria {
+    margin-top: 8px;
+}
+.rank-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+}
+.rank-bronze { background: #8b5e3c; color: #fff; }
+.rank-silver { background: #64748b; color: #fff; }
+.rank-gold { background: #ca8a04; color: #fff; }
+.rank-platinum { background: #0f766e; color: #fff; }
+.rank-diamond { background: #2563eb; color: #fff; }
+.rank-no-rank { background: var(--bg-input); color: var(--text-muted); }
+.grade-details {
+    margin-top: 10px;
+}
+.grade-details pre {
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 /* ==================== VIEW 3: ADD CARD FORM ==================== */
@@ -2723,8 +2795,7 @@ input[type="file"]::file-selector-button:hover {
     color: var(--color-primary);
 }
 
-.login-logo .pokeball-svg {
-    animation: rotate 8s linear infinite;
+.login-logo .pokemon-brand-icon {
     filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
 }
 

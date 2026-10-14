@@ -23,6 +23,7 @@ internal sealed class BinderWindow : Form
 {
     private const string Address = "http://127.0.0.1:8080";
     private readonly WebView2 browser = new() { Dock = DockStyle.Fill };
+    private readonly NotifyIcon tray = new NotifyIcon();
     private Process? server;
 
     public BinderWindow()
@@ -32,9 +33,23 @@ internal sealed class BinderWindow : Form
         Size = new Size(1320, 880);
         StartPosition = FormStartPosition.CenterScreen;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        tray.Icon = Icon ?? SystemIcons.Application;
+        tray.Text = "Pokémon Binder";
+        tray.ContextMenuStrip = new ContextMenuStrip();
+        tray.ContextMenuStrip.Items.Add("Abrir PokéBinder", null, (_, _) => RestoreWindow());
+        tray.ContextMenuStrip.Items.Add("Sair", null, (_, _) => Close());
+        tray.DoubleClick += (_, _) => RestoreWindow();
+        tray.Visible = true;
         Controls.Add(browser);
         Shown += async (_, _) => await StartAsync();
-        FormClosed += (_, _) => StopServer();
+        FormClosed += (_, _) => { StopServer(); tray.Dispose(); };
+    }
+
+    private void RestoreWindow()
+    {
+        WindowState = FormWindowState.Normal;
+        Show();
+        Activate();
     }
 
     private async Task StartAsync()

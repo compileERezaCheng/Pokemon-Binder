@@ -41,8 +41,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.pokemongrader.BuildConfig
 import com.example.pokemongrader.data.Card
+import com.example.pokemongrader.data.CatalogCard
+import com.example.pokemongrader.ui.components.CatalogSetPicker
+import com.example.pokemongrader.ui.components.GradeSummary
 import com.example.pokemongrader.data.DataRepository
 import com.example.pokemongrader.data.PokeApiClient
+import com.example.pokemongrader.data.TcgDexClient
 import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.capitalize
 import com.google.ai.client.generativeai.GenerativeModel
@@ -55,6 +59,18 @@ import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONObject
 
+internal val CONDITION_ESTIMATE_PROMPT = """
+    Estimate physical condition from these front and back photos. This is not professional certification.
+    Look for observable evidence only: border centering, corner wear, edge wear, and surface defects.
+    Do not use copyright year, release date, or suspected authenticity to refuse condition grading.
+    Assess only the visible physical condition of the card.
+    If either photo is cropped, blurred, obscured by glare, or too small to assess any criterion,
+    return {"assessable":false,"grade":null,"reason":"short observable reason"}.
+    Otherwise return ONLY a JSON object: assessable=true; numeric grade from 1 to 10;
+    criteria with centering, corners, edges and surface objects. Each object needs a numeric
+    score from 1 to 10 and a short evidence string describing a visible observation.
+    If a defect cannot be observed reliably, use the non-assessable form. Do not invent defects or scores.
+""".trimIndent()
 
 enum class ScanState {
     CAMERA,
@@ -68,7 +84,12 @@ enum class ScanSide {
     FRONT, BACK
 }
 
-data class ConditionEstimate(val grade: Double?, val evidence: String)
+data class ConditionEstimate(
+    val grade: Double?,
+    val evidence: String,
+    val criteriaJson: String = "",
+    val detailsJson: String = ""
+)
 
 fun parseConditionEstimate(json: JSONObject): ConditionEstimate {
     val assessable = json.getBoolean("assessable")
@@ -76,7 +97,7 @@ fun parseConditionEstimate(json: JSONObject): ConditionEstimate {
         require(json.has("grade") && json.isNull("grade")) { "Unevaluable response must have a null grade" }
         val reason = json.getString("reason").trim()
         require(reason.isNotEmpty()) { "Missing reason" }
-        return ConditionEstimate(null, "Not assessable: $reason")
+        return ConditionEstimate(null, "Not assessable: $reason", detailsJson = json.toString())
     }
     val rawGrade = json.get("grade")
     require(rawGrade is Number) { "Missing numeric grade" }
@@ -93,7 +114,7 @@ fun parseConditionEstimate(json: JSONObject): ConditionEstimate {
         require(observation.isNotEmpty()) { "Missing $name evidence" }
         "$name $score: $observation"
     }
-    return ConditionEstimate(grade, evidence)
+    return ConditionEstimate(grade, evidence, criteria.toString(), json.toString())
 }
 
 @Composable
@@ -139,6 +160,12 @@ fun ScanScreen(
     var resolvedName by remember { mutableStateOf("") }
     var resolvedDex by remember { mutableStateOf(0) }
     var resolvedRarity by remember { mutableStateOf("Normal") }
+    var resolvedImageUrl by remember { mutableStateOf("") }
+    var selectedCatalogCard by remember { mutableStateOf<CatalogCard?>(null) }
+    var catalogSetHint by remember { mutableStateOf("") }
+    var catalogNumberHint by remember { mutableStateOf("") }
+    var resolvedGradeDetails by remember { mutableStateOf("") }
+    var personalNotes by remember { mutableStateOf("") }
     var resolvedGrade by remember { mutableStateOf(0.0) }
     var resolvedCritique by remember { mutableStateOf("") }
     var saveError by remember { mutableStateOf("") }
@@ -209,6 +236,12 @@ fun ScanScreen(
                             captureError = ""
                             resolvedName = ""
                             resolvedRarity = "Normal"
+                            resolvedImageUrl = ""
+                            selectedCatalogCard = null
+                            catalogSetHint = ""
+                            catalogNumberHint = ""
+                            resolvedGradeDetails = ""
+                            personalNotes = ""
                             resolvedGrade = 0.0
                             resolvedCritique = ""
                             resolvedDex = 0
@@ -261,6 +294,10 @@ fun ScanScreen(
                                             resolvedName = result.getString("name")
                                             resolvedRarity = result.getString("rarity")
                                             resolvedDex = result.getInt("dex_number")
+                                            catalogSetHint = result.optString("set_name")
+                                            catalogNumberHint = result.optString("card_number")
+                                            selectedCatalogCard = null
+                                            resolvedImageUrl = ""
                                             if (resolvedDex > 0 && repository.prefilledPage == null) {
                                                 page = (((resolvedDex - 1) / 9) + 1).toString()
                                                 slot = (((resolvedDex - 1) % 9) + 1).toString()
@@ -284,6 +321,11 @@ fun ScanScreen(
                         dex = resolvedDex,
                         rarity = resolvedRarity,
                         grade = resolvedGrade,
+                        gradeDetails = resolvedGradeDetails,
+                        personalNotes = personalNotes,
+                        catalogCard = selectedCatalogCard,
+                        catalogSetHint = catalogSetHint,
+                        catalogNumberHint = catalogNumberHint,
                         critique = resolvedCritique,
                         page = page,
                         slot = slot,
@@ -294,6 +336,10 @@ fun ScanScreen(
                         saveError = saveError,
                         onNameChange = {
                             resolvedName = it
+                            selectedCatalogCard = null
+                            catalogSetHint = ""
+                            catalogNumberHint = ""
+                            resolvedImageUrl = ""
                             if (it.length > 2) {
                                 coroutineScope.launch {
                                     val dex = PokeApiClient.fetchDexNumber(it)
@@ -311,6 +357,10 @@ fun ScanScreen(
                         onDexChange = {
                             val dex = it.toIntOrNull() ?: 0
                             resolvedDex = dex
+                            selectedCatalogCard = null
+                            catalogSetHint = ""
+                            catalogNumberHint = ""
+                            resolvedImageUrl = ""
                             if (dex > 0 && repository.prefilledPage == null) {
                                 val position = PokeApiClient.binderPosition(dex)
                                 page = position.first.toString()
@@ -320,6 +370,13 @@ fun ScanScreen(
                         onRarityChange = { resolvedRarity = it },
                         onGradeChange = { resolvedGrade = it.toDoubleOrNull() ?: 0.0 },
                         onCritiqueChange = { resolvedCritique = it },
+                        onGradeDetailsChange = { resolvedGradeDetails = it },
+                        onNotesChange = { personalNotes = it },
+                        onCatalogSelected = {
+                            selectedCatalogCard = it
+                            resolvedImageUrl = it?.imageUrl.orEmpty()
+                            if (!it?.rarity.isNullOrBlank()) resolvedRarity = it!!.rarity
+                        },
                         onPageChange = { page = it },
                         onSlotChange = { slot = it },
                         onConfirm = {
@@ -344,9 +401,16 @@ fun ScanScreen(
                                         resolvedGrade >= 4.0 -> "MP"
                                         else -> "HP"
                                     },
-                                    notes = resolvedCritique,
+                                    notes = personalNotes.trim(),
+                                    gradeDetails = resolvedGradeDetails,
+                                    catalogCardId = selectedCatalogCard?.id.orEmpty(),
+                                    setId = selectedCatalogCard?.setId.orEmpty(),
+                                    setName = selectedCatalogCard?.setName.orEmpty(),
+                                    cardNumber = selectedCatalogCard?.number.orEmpty(),
+                                    catalogRarity = selectedCatalogCard?.rarity.orEmpty(),
                                     dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
-                                    grade = resolvedGrade
+                                    grade = resolvedGrade,
+                                    imageUrl = selectedCatalogCard?.imageUrl?.takeIf { it.isNotBlank() } ?: resolvedImageUrl
                                 )
                                 // No training-photo upload without an explicit opt-in flow.
                                 if (repository.addCard(card)) {
@@ -441,14 +505,18 @@ suspend fun identifyCardWithGemini(
 
             val prompt = """
                 Analyze the front image of this physical Pokémon card.
-                Identify only the standard English Pokémon name, national Pokedex number, and visible rarity.
-                Do not infer the expansion set. If identification is uncertain, return an empty name.
+                Identify the standard English card name, national Pokedex number, visible rarity,
+                expansion set name, and printed card number (including letters such as TG or SV).
+                If the set or card number is not readable, return an empty string for that field.
+                If identification is uncertain, return an empty name.
                 
                 Return ONLY a JSON object:
                 {
                   "name": "Pokémon Name",
                   "dex_number": 25,
-                  "rarity": "Rarity Tier"
+                  "rarity": "Rarity Tier",
+                  "set_name": "Expansion Name",
+                  "card_number": "123/198"
                 }
             """.trimIndent()
 
@@ -528,21 +596,10 @@ suspend fun gradeCardWithGemini(
                 apiKey = apiKey
             )
 
-            val prompt = """
-                Estimate physical condition from these front and back photos. This is not professional certification.
-                Look for observable evidence only: border centering, corner wear, edge wear, and surface defects.
-                If either photo is cropped, blurred, obscured by glare, or too small to assess any criterion,
-                return {"assessable":false,"grade":null,"reason":"short observable reason"}.
-                Otherwise return ONLY a JSON object: assessable=true; numeric grade from 1 to 10;
-                criteria with centering, corners, edges and surface objects. Each object needs a numeric
-                score from 1 to 10 and a short evidence string describing a visible observation.
-                If a defect cannot be observed reliably, use the non-assessable form. Do not invent defects or scores.
-            """.trimIndent()
-
             val inputContent = content {
                 image(front)
                 image(back)
-                text(prompt)
+                text(CONDITION_ESTIMATE_PROMPT)
             }
 
             var delayMs = 4000L
@@ -884,7 +941,15 @@ fun ConfirmationScreen(
     onPageChange: (String) -> Unit,
     onSlotChange: (String) -> Unit,
     onConfirm: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    gradeDetails: String = "",
+    personalNotes: String = "",
+    catalogCard: CatalogCard? = null,
+    catalogSetHint: String = "",
+    catalogNumberHint: String = "",
+    onGradeDetailsChange: (String) -> Unit = {},
+    onNotesChange: (String) -> Unit = {},
+    onCatalogSelected: (CatalogCard?) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
@@ -926,9 +991,15 @@ fun ConfirmationScreen(
                         .background(Color(0xFF0F172A)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (dex > 0) {
-                        val artUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$dex.png"
-                        AsyncImage(url = artUrl, contentDescription = name, modifier = Modifier.size(80.dp))
+                    val speciesImage = if (dex > 0) "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/" + dex + ".png" else null
+                    val cardImage = catalogCard?.imageUrl?.takeIf { it.startsWith("https://assets.tcgdex.net/") }
+                    if (cardImage != null || speciesImage != null) {
+                        AsyncImage(
+                            url = cardImage ?: speciesImage!!,
+                            fallbackUrl = if (cardImage != null) speciesImage else null,
+                            contentDescription = name,
+                            modifier = Modifier.size(80.dp)
+                        )
                     } else {
                         Text("?", color = Color(0xFF475569), fontSize = 32.sp, fontWeight = FontWeight.Black)
                     }
@@ -1003,9 +1074,14 @@ fun ConfirmationScreen(
                                     val estimate = parseConditionEstimate(gradeCardWithGemini(frontBitmap, backBitmap))
                                     onGradeChange(estimate.grade?.toString() ?: "")
                                     onCritiqueChange(estimate.evidence)
+                                    onGradeDetailsChange(estimate.detailsJson)
                                 } catch (e: Exception) {
                                     onGradeChange("")
-                                    onCritiqueChange("Condition estimate unavailable: ${e.message}")
+                                    onCritiqueChange("Condition estimate unavailable: " + e.message)
+                                    onGradeDetailsChange(
+                                        JSONObject().put("assessable", false).put("grade", JSONObject.NULL)
+                                            .put("reason", e.message ?: "Condition estimate unavailable").toString()
+                                    )
                                 } finally {
                                     isGrading = false
                                 }
@@ -1045,6 +1121,14 @@ fun ConfirmationScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+        CatalogSetPicker(
+            name = name,
+            selected = catalogCard,
+            setHint = catalogSetHint,
+            numberHint = catalogNumberHint,
+            onSelected = onCatalogSelected
+        )
         Spacer(modifier = Modifier.height(12.dp))
 
         Row {
@@ -1138,20 +1222,25 @@ fun ConfirmationScreen(
             )
         }
 
+        if (grade > 0 || gradeDetails.isNotBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            val condition = when {
+                grade <= 0 -> "UNASSESSED"
+                grade >= 8.0 -> "NM"
+                grade >= 6.0 -> "LP"
+                grade >= 4.0 -> "MP"
+                else -> "HP"
+            }
+            GradeSummary(grade, catalogCard?.rarity.orEmpty(), condition, gradeDetails)
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            if (isManual) "Notes" else "Condition observations",
-            color = Color(0xFF94A3B8),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Text("Notes", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
-
         OutlinedTextField(
-            value = critique,
-            onValueChange = onCritiqueChange,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
+            value = personalNotes,
+            onValueChange = onNotesChange,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,

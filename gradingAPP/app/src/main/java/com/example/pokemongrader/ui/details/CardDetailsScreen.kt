@@ -18,7 +18,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.pokemongrader.data.CatalogCard
 import com.example.pokemongrader.data.DataRepository
+import com.example.pokemongrader.ui.components.CatalogSetPicker
+import com.example.pokemongrader.ui.components.GradeSummary
 import com.example.pokemongrader.ui.components.PokemonCard
 import kotlinx.coroutines.launch
 
@@ -30,15 +33,25 @@ fun CardDetailsScreen(
     dateAdded: String,
     repository: DataRepository,
     onNavigateBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    copyId: String = ""
 ) {
     val cards by repository.cards.collectAsStateWithLifecycle()
-    val card = remember(cards, page, slot, dateAdded) {
-        cards.find { it.page == page && it.slot == slot && it.dateAdded == dateAdded }
+    val card = remember(cards, page, slot, dateAdded, copyId) {
+        cards.find { copyId.isNotBlank() && it.copyId == copyId }
+            ?: cards.find { it.page == page && it.slot == slot && it.dateAdded == dateAdded }
     }
-    
     val coroutineScope = rememberCoroutineScope()
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var saveMessage by remember { mutableStateOf("") }
+    var isSavingSet by remember { mutableStateOf(false) }
+    val currentCatalog = card?.catalogCardId?.takeIf { it.isNotBlank() }?.let {
+        CatalogCard(
+            id = card.catalogCardId, name = card.name, setId = card.setId, setName = card.setName,
+            number = card.cardNumber, rarity = card.catalogRarity, imageUrl = card.imageUrl
+        )
+    }
+    var selectedCatalog by remember(card?.copyId) { mutableStateOf(currentCatalog) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -66,35 +79,61 @@ fun CardDetailsScreen(
             }
         } else {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                PokemonCard(
-                    card = card,
-                    modifier = Modifier.fillMaxWidth(0.8f)
-                )
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                // Info Section
+                PokemonCard(card = card, modifier = Modifier.fillMaxWidth(0.8f))
+                Spacer(modifier = Modifier.height(20.dp))
+                GradeSummary(card.grade, card.catalogRarity, card.condition, card.gradeDetails)
+                Spacer(modifier = Modifier.height(16.dp))
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A))
-                        .padding(16.dp)
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF0F172A)).padding(16.dp)
                 ) {
                     DetailRow("Name", card.name)
-                    DetailRow("Dex Number", if (card.dexNumber > 0) "#${card.dexNumber}" else "Custom")
-                    DetailRow("Rarity", card.type)
+                    DetailRow("Dex Number", if (card.dexNumber > 0) "#" + card.dexNumber else "Custom")
+                    DetailRow("Rarity", card.catalogRarity.ifBlank { card.type })
                     DetailRow("Condition", card.condition)
-                    DetailRow("Location", "Page ${card.page}, Slot ${card.slot}")
+                    if (card.setName.isNotBlank()) DetailRow("Set", card.setName)
+                    if (card.cardNumber.isNotBlank()) DetailRow("Card Number", card.cardNumber)
+                    DetailRow("Location", "Page " + card.page + ", Slot " + card.slot)
                     DetailRow("Date Added", card.dateAdded)
-                    
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Sets", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    CatalogSetPicker(
+                        name = card.name,
+                        selected = selectedCatalog,
+                        onSelected = { selectedCatalog = it }
+                    )
+                    if (selectedCatalog?.id != currentCatalog?.id) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            enabled = !isSavingSet,
+                            onClick = {
+                                val selection = selectedCatalog
+                                isSavingSet = true
+                                saveMessage = ""
+                                coroutineScope.launch {
+                                    val updated = card.copy(
+                                        catalogCardId = selection?.id.orEmpty(),
+                                        setId = selection?.setId.orEmpty(),
+                                        setName = selection?.setName.orEmpty(),
+                                        cardNumber = selection?.number.orEmpty(),
+                                        catalogRarity = selection?.rarity.orEmpty(),
+                                        imageUrl = selection?.imageUrl.orEmpty(),
+                                        type = selection?.rarity?.ifBlank { card.type } ?: card.type
+                                    )
+                                    val saved = repository.updateCard(updated)
+                                    isSavingSet = false
+                                    saveMessage = if (saved) "Set saved." else "Could not save the set. Retry."
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                        ) { Text(if (isSavingSet) "Saving..." else "Save set") }
+                    }
+                    if (saveMessage.isNotBlank()) Text(saveMessage, color = Color(0xFFCBD5E1), fontSize = 13.sp)
+
                     if (card.notes.isNotBlank()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Notes", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -122,15 +161,9 @@ fun CardDetailsScreen(
                         }
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
-                ) {
-                    Text("DELETE")
-                }
+                ) { Text("DELETE") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("CANCEL")
-                }
-            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("CANCEL") } },
             containerColor = Color(0xFF0F172A),
             titleContentColor = Color.White,
             textContentColor = Color.LightGray

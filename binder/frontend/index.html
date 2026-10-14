@@ -14,19 +14,14 @@
     <link rel="stylesheet" href="index.css">
     
     <!-- Favicon -->
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico?v=2">
 </head>
 <body class="dark-theme">
     <!-- Firebase sign-in is optional; the local binder works without an account. -->
     <div id="login-overlay" class="login-overlay hidden">
         <div class="login-card">
             <div class="login-logo">
-                <svg class="pokeball-svg" viewBox="0 0 100 100" width="48" height="48">
-                    <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
-                    <line x1="5" y1="50" x2="95" y2="50" stroke="currentColor" stroke-width="8"/>
-                    <circle cx="50" cy="50" r="18" fill="var(--bg-card)" stroke="currentColor" stroke-width="8"/>
-                    <circle cx="50" cy="50" r="6" fill="currentColor"/>
-                </svg>
+                <img class="pokemon-brand-icon" src="/pokemon.png?v=1" alt="" width="48" height="48">
                 <h1>PokeBinder</h1>
                 <p>Sign in only if you want to sync with Firebase.</p>
             </div>
@@ -53,13 +48,8 @@
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="logo-area">
-                <div class="pokeball-icon-container">
-                    <svg class="pokeball-svg" viewBox="0 0 100 100" width="36" height="36">
-                        <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
-                        <line x1="5" y1="50" x2="95" y2="50" stroke="currentColor" stroke-width="8"/>
-                        <circle cx="50" cy="50" r="18" fill="var(--bg-card)" stroke="currentColor" stroke-width="8"/>
-                        <circle cx="50" cy="50" r="6" fill="currentColor"/>
-                    </svg>
+                <div class="pokemon-icon-container">
+                    <img class="pokemon-brand-icon" src="/pokemon.png?v=1" alt="" width="36" height="36">
                 </div>
                 <h2>PokeBinder</h2>
             </div>
@@ -288,6 +278,12 @@
                                 <input type="text" id="add-search-input" placeholder="e.g. Charizard or 6" autocomplete="off" oninput="handleAutocomplete(this.value)">
                                 <div id="autocomplete-suggestions" class="autocomplete-suggestions-box hidden"></div>
                             </div>
+                        </div>
+                        <div class="form-group">
+                            <label>TCGdex printing (optional)</label>
+                            <div id="add-set-status" class="muted-text" aria-live="polite">Select a Pokémon to search its printings.</div>
+                            <div id="add-set-options" class="catalog-options" role="listbox" aria-label="TCGdex printings"></div>
+                            <button id="add-clear-set" class="btn-secondary" type="button" onclick="clearAddCatalogCard()" disabled>Clear printing selection</button>
                         </div>
 
                         <!-- Card Metadata details -->
@@ -593,8 +589,24 @@
                     <p class="muted-text date-label">Added on: <span id="modal-pokemon-date">2026-05-23</span></p>
                     
                     <div class="detail-group">
-                        <label>Notes</label>
+                        <label>Personal notes</label>
                         <div class="notes-content-box" id="modal-pokemon-notes">No notes available for this card.</div>
+                    </div>
+                    <div class="detail-group">
+                        <label>Grading summary</label>
+                        <div id="modal-grade-summary" class="grade-summary"></div>
+                        <div id="modal-grade-criteria" class="grade-criteria"></div>
+                        <details id="modal-grade-details" class="grade-details">
+                            <summary>More details</summary>
+                            <pre id="modal-grade-details-text"></pre>
+                        </details>
+                    </div>
+                    <div class="detail-group">
+                        <label>TCGdex printing</label>
+                        <div id="modal-current-set" class="muted-text"></div>
+                        <div id="modal-set-status" class="muted-text" aria-live="polite"></div>
+                        <div id="modal-set-options" class="catalog-options" role="listbox" aria-label="TCGdex printings"></div>
+                        <button id="modal-save-set" class="btn-secondary" onclick="saveModalCatalogCard()" disabled>Save printing</button>
                     </div>
 
                     <!-- Multiple stack items container if stacked -->

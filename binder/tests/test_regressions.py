@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import struct
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -63,6 +64,118 @@ class TemporaryBinderTest(unittest.TestCase):
 
 
 class BackendDataTests(TemporaryBinderTest):
+    @staticmethod
+    def species_pages(old_cache):
+        names = {value["id"]: name for name, value in old_cache.items() if not name.isdigit() and isinstance(value, dict)}
+        results = [
+            {"name": names.get(dex, "pecharunt" if dex == 1025 else f"species-{dex}"),
+             "url": f"https://pokeapi.co/api/v2/pokemon-species/{dex}/"}
+            for dex in range(1, 1026)
+        ]
+        return [
+            {"count": 1025, "next": "https://pokeapi.co/api/v2/pokemon-species/?offset=1000&limit=1000", "results": results[:1000]},
+            {"count": 1025, "next": None, "results": results[1000:]},
+        ]
+
+    def write_cache(self, cache):
+        with open(pokemon_binder.CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+
+    def test_old_gen1_cache_is_paginated_and_upgraded_without_losing_types(self):
+        old_cache = pokemon_binder.get_gen1_fallback()
+        self.write_cache(old_cache)
+        pages = [io.BytesIO(json.dumps(page).encode()) for page in self.species_pages(old_cache)]
+
+        with patch.object(pokemon_binder.urllib.request, "urlopen", side_effect=pages) as request:
+            database = pokemon_binder.load_pokemon_database()
+
+        self.assertEqual(2, request.call_count)
+        self.assertGreaterEqual(sum(not key.isdigit() for key in database), 1025)
+        self.assertEqual("grass", database["bulbasaur"]["type"])
+        self.assertNotIn("type", database["pecharunt"])
+        self.assertEqual("pecharunt", database["1025"]["name"])
+        self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("pecharunt", database))
+        self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("1025", database))
+
+    def test_bundled_gen1_cache_is_upgraded_for_a_fresh_desktop_profile(self):
+        bundled_cache = Path(self.temp_dir.name) / "bundle" / "data" / "pokemon_cache.json"
+        bundled_cache.parent.mkdir(parents=True)
+        old_cache = pokemon_binder.get_gen1_fallback()
+        bundled_cache.write_text(json.dumps(old_cache), encoding="utf-8")
+        original_bytes = bundled_cache.read_bytes()
+        pages = [io.BytesIO(json.dumps(page).encode()) for page in self.species_pages(old_cache)]
+
+        with patch.object(pokemon_binder, "get_resource_path", return_value=str(bundled_cache)), \
+                patch.object(pokemon_binder.urllib.request, "urlopen", side_effect=pages):
+            database = pokemon_binder.load_pokemon_database()
+
+        self.assertGreaterEqual(sum(not key.isdigit() for key in database), 1025)
+        self.assertTrue(Path(pokemon_binder.CACHE_FILE).is_file())
+        self.assertEqual(original_bytes, bundled_cache.read_bytes())
+
+    def test_failed_pokemon_cache_refresh_keeps_old_file_and_retries(self):
+        old_cache = pokemon_binder.get_gen1_fallback()
+        self.write_cache(old_cache)
+        original_bytes = Path(pokemon_binder.CACHE_FILE).read_bytes()
+        first_page = self.species_pages(old_cache)[0]
+        responses = [io.BytesIO(json.dumps(first_page).encode()), OSError("offline"), OSError("offline")]
+
+        with patch.object(pokemon_binder.urllib.request, "urlopen", side_effect=responses) as request:
+            self.assertEqual(old_cache, pokemon_binder.load_pokemon_database())
+            self.assertEqual(old_cache, pokemon_binder.load_pokemon_database())
+
+        request.assert_called()
+        self.assertEqual(3, request.call_count)
+        self.assertEqual(original_bytes, Path(pokemon_binder.CACHE_FILE).read_bytes())
+
+    def test_partial_species_list_does_not_replace_previous_cache(self):
+        old_cache = pokemon_binder.get_gen1_fallback()
+        self.write_cache(old_cache)
+        original_bytes = Path(pokemon_binder.CACHE_FILE).read_bytes()
+        partial = {"count": 1025, "next": None, "results": [
+            {"name": "bulbasaur", "url": "https://pokeapi.co/api/v2/pokemon-species/1/"}
+        ]}
+
+        with patch.object(pokemon_binder.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(partial).encode())):
+            database = pokemon_binder.load_pokemon_database()
+
+        self.assertEqual(old_cache, database)
+        self.assertEqual(original_bytes, Path(pokemon_binder.CACHE_FILE).read_bytes())
+
+    def test_legacy_flat_cache_remains_searchable_by_name_and_number(self):
+        old_cache = pokemon_binder.get_gen1_fallback()
+        old_names = {value["id"]: name for name, value in old_cache.items() if not name.isdigit()}
+        names = {dex: old_names.get(dex, "pecharunt" if dex == 1025 else f"species-{dex}") for dex in range(1, 1026)}
+        flat_cache = {name: dex for dex, name in names.items()}
+        flat_cache.update({str(dex): name for dex, name in names.items()})
+        self.write_cache(flat_cache)
+
+        with patch.object(pokemon_binder.urllib.request, "urlopen") as request:
+            database = pokemon_binder.load_pokemon_database()
+
+        request.assert_not_called()
+        self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("pecharunt", database))
+        self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("1025", database))
+
+    def test_card_image_url_survives_csv_reload(self):
+        image_url = "https://assets.tcgdex.net/en/base/base1/4"
+        self.assertTrue(pokemon_binder.add_card_to_csv({**card("charizard", dex=6), "Image URL": image_url}))
+
+        self.assertEqual(image_url, pokemon_binder.load_collection()[0].get("Image URL"))
+
+    def test_catalog_and_grade_metadata_survive_csv_reload(self):
+        details = json.dumps({"assessable": True, "criteria": {"centering": {"score": 8, "evidence": "even"}}})
+        metadata = {
+            "Catalog Card ID": "base1-4", "Set ID": "base1", "Set Name": "Base",
+            "Card Number": "4", "Catalog Rarity": "Rare Holo",
+            "Image URL": "https://assets.tcgdex.net/en/base/base1/4/low.webp",
+            "Grade": "8.5", "Grade Details": details,
+        }
+        self.assertTrue(pokemon_binder.add_card_to_csv({**card("charizard", dex=6), **metadata}))
+        loaded = pokemon_binder.load_collection()[0]
+        for key, value in metadata.items():
+            self.assertEqual(value, loaded.get(key), key)
+
     def test_csv_add_remove_and_stacks_survive_reload(self):
         self.assertTrue(pokemon_binder.add_card_to_csv(card("pikachu", slot=2, dex=25)))
         self.assertTrue(pokemon_binder.add_card_to_csv(card("pikachu", slot=2, dex=25, rarity="Holofoil Rare")))
@@ -123,6 +236,56 @@ class BinderApiTests(TemporaryBinderTest):
                 return response.status, json.loads(response.read())
         except HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def test_catalog_metadata_update_preserves_copy_data(self):
+        details = json.dumps({"assessable": True, "criteria": {"centering": {"score": 8, "evidence": "even"}}})
+        _, added = self.request_json("/api/add", {
+            "name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7, "type": "Rare Holo",
+            "condition": "LP", "notes": "keep my note", "catalog_card_id": "base1-25",
+            "set_id": "base1", "set_name": "Base", "card_number": "25",
+            "catalog_rarity": "Rare Holo", "image_url": "https://assets.tcgdex.net/en/base/base1/25/low.webp",
+            "grade": 8.5, "grade_details": details,
+        })
+        self.assertTrue(added["success"])
+        before = pokemon_binder.load_collection()[0]
+        self.assertTrue(before.get("Copy ID"))
+        self.assertEqual(("Rare Holo", "Rare Holo"), (before["Type"], before["Catalog Rarity"]))
+        status, updated = self.request_json("/api/update-card", {
+            "copy_id": before["Copy ID"], "page": before["Page"], "slot": before["Slot"], "name": before["Name"],
+            "date_added": before["Date Added"], "catalog_card_id": "neo3-12",
+            "set_id": "neo3", "set_name": "Neo Revelation", "card_number": "12",
+            "catalog_rarity": "Rare", "image_url": "https://assets.tcgdex.net/en/neo/neo3/12/low.webp",
+        })
+        self.assertEqual(200, status, updated)
+        after = pokemon_binder.load_collection()[0]
+        self.assertEqual(("neo3-12", "neo3", "12"), (after["Catalog Card ID"], after["Set ID"], after["Card Number"]))
+        self.assertEqual(before["Type"], after["Type"])
+        for key in ("Page", "Slot", "Date Added", "Notes", "Grade", "Grade Details"):
+            self.assertEqual(before[key], after[key], key)
+
+    def test_pokemon_database_response_is_not_cached_by_the_browser(self):
+        with patch.object(pokemon_binder, "load_pokemon_database", return_value={"pikachu": {"id": 25}}):
+            request = Request(self.base_url + "/api/pokemon-db")
+            with urlopen(request, timeout=2) as response:
+                self.assertIn("no-store", response.headers.get("Cache-Control", ""))
+
+    def test_favicon_uses_bundled_icon_when_appdata_has_an_old_copy(self):
+        (self.data_dir / "pokeball.ico").write_bytes(b"old icon")
+        internal_data = Path(self.temp_dir.name) / "internal-data"
+        internal_data.mkdir()
+        (internal_data / "pokeball.ico").write_bytes(b"current icon")
+        (internal_data / "pokemon.png").write_bytes(b"Pikachu artwork")
+
+        with patch.object(pokemon_server, "INTERNAL_DATA_DIR", str(internal_data)):
+            request = Request(self.base_url + "/favicon.ico")
+            with urlopen(request, timeout=2) as response:
+                self.assertEqual(b"current icon", response.read())
+            request = Request(self.base_url + "/pokemon.png?v=1")
+            with urlopen(request, timeout=2) as response:
+                self.assertEqual(b"Pikachu artwork", response.read())
+
+        html = (BINDER_DIR / "frontend" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="/favicon.ico?v=2"', html)
 
     def test_add_remove_and_position_suggestions(self):
         status, _ = self.request_json("/api/add", {"name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7})
@@ -197,6 +360,16 @@ class FirebaseSyncTests(TemporaryBinderTest):
 
     def sync(self, local):
         return pokemon_binder.sync_with_firebase(self.config, local)
+
+    def test_first_sync_keeps_different_catalog_editions_separate(self):
+        base = card("pikachu", dex=25)
+        local = dict(base, **{"Catalog Card ID": "base1-25", "Set ID": "base1"})
+        remote = dict(base, **{"Catalog Card ID": "neo3-12", "Set ID": "neo3"})
+        self.remote = [remote]
+        ok, _ = self.sync([local])
+        self.assertTrue(ok)
+        merged = pokemon_binder.load_collection()
+        self.assertEqual({"base1-25", "neo3-12"}, {c.get("Catalog Card ID") for c in merged})
 
     def test_first_link_unions_both_sides_and_preserves_duplicate_stacks(self):
         pikachu = card("pikachu", dex=25)
@@ -305,6 +478,31 @@ class ServerLifecycleTests(TemporaryBinderTest):
         default_browser.assert_called_once_with(f"http://127.0.0.1:{pokemon_server.PORT}")
         edge_app.assert_not_called()
 
+    def test_tray_icon_uses_version_four_and_handles_its_callback_format(self):
+        import ctypes
+
+        class NotifyData(ctypes.Structure):
+            _fields_ = [("uTimeoutOrVersion", ctypes.c_uint)]
+
+        class FakeShell:
+            def __init__(self):
+                self.actions = []
+
+            def Shell_NotifyIconW(self, action, notify_data):
+                self.actions.append(action)
+                return True
+
+        opened = []
+        tray = pokemon_server.SystemTrayIcon(lambda: opened.append(True), lambda: None)
+        tray._shell = FakeShell()
+        tray._notify_data = NotifyData()
+        tray._add_icon()
+
+        self.assertEqual([tray.NIM_ADD, 0x00000004], tray._shell.actions)
+        self.assertEqual(4, tray._notify_data.uTimeoutOrVersion)
+        tray._window_proc(1, tray.WM_TRAY, 0, (1 << 16) | tray.WM_LBUTTONDBLCLK)
+        self.assertEqual([True], opened)
+
     def test_context_menu_uses_the_point_type_declared_for_get_cursor_pos(self):
         import ctypes
         from ctypes import wintypes
@@ -380,6 +578,36 @@ class ServerLifecycleTests(TemporaryBinderTest):
         self.assertTrue(fake_server.closed)
         tray.assert_called_once()
         self.assertNotIn("monitor_heartbeat", started_targets)
+
+    def test_installer_launches_the_tray_server_and_packages_only_its_files(self):
+        installer = (BINDER_DIR / "setup_script.iss").read_text(encoding="utf-8")
+        build = (BINDER_DIR / "build.ps1").read_text(encoding="utf-8")
+        launcher = r'Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"'
+
+        self.assertEqual(installer.count(launcher), 3)
+        self.assertIn(
+            r'Source: "dist\PokemonBinderServer\*"; DestDir: "{app}\PokemonBinderServer"; Flags: ignoreversion recursesubdirs createallsubdirs',
+            installer,
+        )
+        self.assertIn(r'Source: "data\pokeball.ico"; DestDir: "{app}"; Flags: ignoreversion', installer)
+        self.assertEqual(2, installer.count(r'IconFilename: "{app}\pokeball.ico"'))
+        self.assertIn(r'Name: "{autodesktop}\Pokemon Binder Manager.lnk"', installer)
+        self.assertNotIn("Tasks: desktopicon", installer)
+        self.assertIn(r'SetupIconFile=data\pokeball.ico', installer)
+        self.assertIn(r'--icon="$PSScriptRoot\data\pokeball.ico"', build)
+
+    def test_windows_app_registers_a_visible_notification_area_icon(self):
+        app = (BINDER_DIR / "src" / "Program.cs").read_text(encoding="utf-8")
+
+        self.assertIn("new NotifyIcon", app)
+        self.assertIn("Visible = true", app)
+
+    def test_pokeball_app_icon_contains_windows_icon_sizes(self):
+        icon = (BINDER_DIR / "data" / "pokeball.ico").read_bytes()
+        reserved, image_type, count = struct.unpack_from("<HHH", icon)
+        self.assertEqual((0, 1), (reserved, image_type))
+        widths = {icon[6 + 16 * index] or 256 for index in range(count)}
+        self.assertTrue({16, 32, 48, 128, 256}.issubset(widths))
 
     def test_packaged_server_leaves_window_to_webview(self):
         fake_server = Mock()
