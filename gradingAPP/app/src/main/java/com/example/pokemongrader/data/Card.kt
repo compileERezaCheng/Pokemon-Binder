@@ -21,6 +21,8 @@ data class Card(
     val cardNumber: String = "",
     val catalogRarity: String = "",
     val gradeDetails: String = "",
+    val imageSource: String = "",
+    val imageMatchId: String = "",
     val copyId: String = UUID.randomUUID().toString()
 ) {
     fun toJsonObject(): JSONObject {
@@ -41,6 +43,8 @@ data class Card(
             if (cardNumber.isNotEmpty()) put("Card Number", cardNumber)
             if (catalogRarity.isNotEmpty()) put("Catalog Rarity", catalogRarity)
             if (gradeDetails.isNotEmpty()) put("Grade Details", gradeDetails)
+            if (imageSource.isNotEmpty()) put("Image Source", imageSource)
+            if (imageMatchId.isNotEmpty()) put("Image Match ID", imageMatchId)
             if (copyId.isNotEmpty()) put("Copy ID", copyId)
         }
     }
@@ -64,6 +68,8 @@ data class Card(
                 cardNumber = obj.optString("Card Number", ""),
                 catalogRarity = obj.optString("Catalog Rarity", ""),
                 gradeDetails = obj.optString("Grade Details", ""),
+                imageSource = obj.optString("Image Source", ""),
+                imageMatchId = obj.optString("Image Match ID", ""),
                 copyId = obj.optString("Copy ID", "").ifBlank { UUID.randomUUID().toString() }
             )
         }

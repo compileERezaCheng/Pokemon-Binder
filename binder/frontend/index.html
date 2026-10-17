@@ -282,7 +282,9 @@
                         <div class="form-group">
                             <label>TCGdex printing (optional)</label>
                             <div id="add-set-status" class="muted-text" aria-live="polite">Select a Pokémon to search its printings.</div>
+                            <input id="add-set-search" class="catalog-search" type="search" placeholder="Pesquisar edições…" aria-label="Pesquisar edições" oninput="filterCatalogOptions('add-set-options', this.value)" autocomplete="off" hidden>
                             <div id="add-set-options" class="catalog-options" role="listbox" aria-label="TCGdex printings"></div>
+                            <div id="add-set-search-empty" class="catalog-search-empty hidden" role="status">Nenhuma edição corresponde à pesquisa.</div>
                             <button id="add-clear-set" class="btn-secondary" type="button" onclick="clearAddCatalogCard()" disabled>Clear printing selection</button>
                         </div>
 
@@ -548,82 +550,112 @@
 
     <!-- MODAL: CARD VIEW DETAILS -->
     <div id="card-modal" class="modal-overlay hidden" onclick="closeCardModal(event)">
-        <div class="modal-card-content" onclick="event.stopPropagation()">
-            <button class="modal-close-btn" onclick="closeCardModal()">
+        <section class="modal-card-content" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="modal-details-title">
+            <button class="modal-close-btn" type="button" aria-label="Fechar detalhes" onclick="closeCardModal()">
                 <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
             </button>
             <div class="modal-body-layout">
                 <div class="modal-card-visual">
-                    <div class="pokemon-card-container active">
-                        <div class="pokemon-card-preview" id="modal-card-element">
-                            <div class="card-inner">
-                                <div class="card-front">
-                                    <div class="card-image-frame">
-                                        <img id="modal-pokemon-image" src="" alt="Pokémon Sprite" class="pokemon-artwork">
-                                    </div>
-                                    <div class="card-header">
-                                        <span class="card-name" id="modal-pokemon-name">Pokémon Name</span>
-                                        <span class="card-dex-number" id="modal-pokemon-dex">#???</span>
-                                    </div>
-                                    <div class="card-body">
-                                        <div class="card-spec">
-                                            <span>Rarity:</span>
-                                            <span class="badge Normal" id="modal-pokemon-type">Normal</span>
-                                        </div>
-                                        <div class="card-spec">
-                                            <span>Condition:</span>
-                                            <span class="badge NM" id="modal-pokemon-condition">NM</span>
-                                        </div>
-                                        <div class="card-spec">
-                                            <span>Position:</span>
-                                            <span id="modal-pokemon-location">Page X, Slot Y</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <button id="modal-card-artwork-button" class="modal-card-artwork" type="button" disabled aria-label="Imagem da carta" onclick="openModalImageViewer()">
+                        <img id="modal-card-artwork-image" class="hidden" src="" alt="">
+                        <span id="modal-card-artwork-placeholder" class="artwork-placeholder" aria-live="polite">A carregar imagem…</span>
+                        <span id="modal-card-rank" class="card-rank-overlay hidden" aria-live="polite">
+                            <span id="modal-card-rank-name" class="sr-only"></span>
+                            <strong id="modal-card-rank-grade"></strong>
+                        </span>
+                    </button>
                 </div>
                 <div class="modal-card-details">
-                    <h2 id="modal-details-title">Bulbasaur Details</h2>
-                    <p class="muted-text date-label">Added on: <span id="modal-pokemon-date">2026-05-23</span></p>
-                    
-                    <div class="detail-group">
-                        <label>Personal notes</label>
-                        <div class="notes-content-box" id="modal-pokemon-notes">No notes available for this card.</div>
+                    <h2 id="modal-details-title">Pokémon</h2>
+
+                    <section class="modal-current-printing" aria-label="Edição guardada">
+                        <div class="modal-current-printing-art">
+                            <img id="modal-current-set-image" class="hidden" src="" alt="">
+                            <span id="modal-current-set-image-placeholder" class="artwork-placeholder">Imagem indisponível</span>
+                        </div>
+                        <div class="modal-current-printing-copy">
+                            <span id="modal-current-label" class="modal-eyebrow">Edição</span>
+                            <strong id="modal-current-set">Sem edição guardada</strong>
+                            <span id="modal-current-number" class="modal-secondary-text"></span>
+                            <button id="modal-open-set-picker" class="btn-secondary" type="button" onclick="openModalPrintingPicker()">Alterar edição</button>
+                        </div>
+                    </section>
+
+                    <div class="modal-copy-facts" aria-label="Informação da cópia">
+                        <div class="modal-copy-fact"><span>Condição</span><strong id="modal-pokemon-condition">—</strong></div>
+                        <div class="modal-copy-fact"><span>Raridade</span><strong id="modal-pokemon-type">—</strong></div>
+                        <div class="modal-copy-fact modal-grade-fact"><span>Nota e rank</span>
+                            <div id="modal-grade-summary" class="grade-summary"></div>
+                        </div>
                     </div>
-                    <div class="detail-group">
-                        <label>Grading summary</label>
-                        <div id="modal-grade-summary" class="grade-summary"></div>
-                        <div id="modal-grade-criteria" class="grade-criteria"></div>
-                        <details id="modal-grade-details" class="grade-details">
-                            <summary>More details</summary>
-                            <pre id="modal-grade-details-text"></pre>
-                        </details>
-                    </div>
-                    <div class="detail-group">
-                        <label>TCGdex printing</label>
-                        <div id="modal-current-set" class="muted-text"></div>
-                        <div id="modal-set-status" class="muted-text" aria-live="polite"></div>
-                        <div id="modal-set-options" class="catalog-options" role="listbox" aria-label="TCGdex printings"></div>
-                        <button id="modal-save-set" class="btn-secondary" onclick="saveModalCatalogCard()" disabled>Save printing</button>
+                    <div id="modal-grade-criteria" class="grade-criteria"></div>
+                    <details id="modal-grade-details" class="grade-details">
+                        <summary>Detalhes da avaliação</summary>
+                        <pre id="modal-grade-details-text"></pre>
+                    </details>
+                    <p class="modal-secondary-text modal-copy-location"><span id="modal-pokemon-date"></span><span id="modal-pokemon-location"></span></p>
+
+                    <button id="modal-edit-details" class="btn-secondary modal-edit-toggle" type="button" aria-expanded="false" onclick="toggleModalEditDetails()">Editar detalhes</button>
+                    <form id="modal-edit-form" class="modal-edit-form hidden" onsubmit="event.preventDefault(); saveModalCopyDetails()">
+                        <label for="modal-edit-name">Pokémon</label>
+                        <input id="modal-edit-name" type="text" maxlength="80" required>
+                        <div class="modal-edit-grid">
+                            <label for="modal-edit-dex">N.º Pokédex<input id="modal-edit-dex" type="number" min="0" step="1"></label>
+                            <label for="modal-edit-condition">Condição<select id="modal-edit-condition"><option value="NM">NM</option><option value="LP">LP</option><option value="MP">MP</option><option value="HP">HP</option></select></label>
+                            <label for="modal-edit-page">Página<input id="modal-edit-page" type="number" min="1" step="1" required></label>
+                            <label for="modal-edit-slot">Espaço<input id="modal-edit-slot" type="number" min="1" step="1" required></label>
+                            <label for="modal-edit-type">Tipo da cópia<input id="modal-edit-type" type="text" maxlength="60"></label>
+                            <label for="modal-edit-rarity">Raridade do catálogo<input id="modal-edit-rarity" type="text" maxlength="60"></label>
+                            <label for="modal-edit-grade">Nota<input id="modal-edit-grade" type="number" min="1" max="10" step="0.1" placeholder="Sem avaliação"></label>
+                            <label for="modal-edit-date">Data de adição<input id="modal-edit-date" type="datetime-local" step="1" required></label>
+                        </div>
+                        <div class="modal-edit-actions">
+                            <button class="btn-secondary" type="button" onclick="cancelModalEditDetails()">Cancelar</button>
+                            <button id="modal-save-details" class="btn-primary" type="submit">Guardar alterações</button>
+                        </div>
+                        <span id="modal-edit-status" class="modal-secondary-text" aria-live="polite"></span>
+                    </form>
+
+                    <div class="detail-group modal-notes-group">
+                        <label for="modal-pokemon-notes">Notas</label>
+                        <textarea class="notes-content-box" id="modal-pokemon-notes" rows="2" placeholder="Adicionar uma nota…" onblur="saveModalNotes()"></textarea>
+                        <span id="modal-notes-status" class="modal-secondary-text" aria-live="polite"></span>
                     </div>
 
-                    <!-- Multiple stack items container if stacked -->
+                    <div class="detail-group modal-edition-group">
+                        <div id="modal-set-status" class="modal-set-status" aria-live="polite"></div>
+                        <div id="modal-set-picker" class="modal-set-picker hidden">
+                            <div class="modal-picker-toolbar">
+                                <span id="modal-pending-set" class="modal-pending-set hidden" aria-live="polite"></span>
+                                <div class="modal-picker-actions">
+                                    <button id="modal-cancel-set" class="btn-secondary" type="button" onclick="cancelModalCatalogSelection()">Cancelar</button>
+                                    <button id="modal-save-set" class="btn-primary" type="button" onclick="saveModalCatalogCard()" disabled>Guardar edição</button>
+                                </div>
+                            </div>
+                            <input id="modal-set-search" class="catalog-search" type="search" placeholder="Pesquisar edições…" aria-label="Pesquisar edições" oninput="filterCatalogOptions('modal-set-options', this.value)" autocomplete="off" hidden>
+                            <div id="modal-set-options" class="catalog-options" role="listbox" aria-label="Edições TCGdex"></div>
+                            <div id="modal-set-search-empty" class="catalog-search-empty hidden" role="status">Nenhuma edição corresponde à pesquisa.</div>
+                        </div>
+                    </div>
+
                     <div id="modal-stacked-section" class="hidden">
-                        <label>Cards Stacked in this Pocket</label>
+                        <label>Cartas nesta posição</label>
                         <div class="stacked-cards-list" id="modal-stacked-list"></div>
                     </div>
 
                     <div class="modal-actions">
-                        <button class="btn-danger" id="modal-delete-btn" onclick="deleteCardFromModal()">
-                            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                            Remove from Collection
+                        <button class="btn-remove-quiet" type="button" id="modal-delete-btn" onclick="deleteCardFromModal()">
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19h12v2H6zm1-15h10l1 2H6zm1 4h8v9H8z"/></svg>
+                            Remover da coleção
                         </button>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
+    </div>
+    <div id="modal-image-viewer" class="modal-image-viewer hidden" role="dialog" aria-modal="true" aria-label="Imagem ampliada da carta" onclick="closeModalImageViewer()">
+        <button class="modal-image-viewer-close" type="button" aria-label="Fechar imagem ampliada" onclick="closeModalImageViewer()">×</button>
+        <img id="modal-image-viewer-image" src="" alt="">
     </div>
     <script src="index.js"></script>
 </body>

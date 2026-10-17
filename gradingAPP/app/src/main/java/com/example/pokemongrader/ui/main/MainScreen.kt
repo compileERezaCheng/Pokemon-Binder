@@ -35,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -61,6 +62,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -196,14 +199,19 @@ fun AsyncImage(
     url: String,
     contentDescription: String,
     modifier: Modifier = Modifier,
-    fallbackUrl: String? = null
+    fallbackUrl: String? = null,
+    placeholder: String? = null,
+    onClick: (() -> Unit)? = null,
+    onError: (() -> Unit)? = null
 ) {
-    var bitmap by remember(url, fallbackUrl) { mutableStateOf<Bitmap?>(null) }
+    var image by remember(url, fallbackUrl) { mutableStateOf<Pair<String, Bitmap>?>(null) }
+    val currentOnError by rememberUpdatedState(onError)
 
     LaunchedEffect(url, fallbackUrl) {
-        bitmap = withContext(Dispatchers.IO) {
-            var loaded: Bitmap? = null
-            listOfNotNull(url, fallbackUrl).distinct().forEach { source ->
+        image = withContext(Dispatchers.IO) {
+            var loaded: Pair<String, Bitmap>? = null
+            listOfNotNull(url, fallbackUrl).filter { it.isNotBlank() }.distinct().forEach { source ->
+                ensureActive()
                 if (loaded == null) {
                     try {
                         val conn = URL(source).openConnection() as HttpURLConnection
@@ -211,11 +219,15 @@ fun AsyncImage(
                         conn.readTimeout = 3000
                         try {
                             if (conn.responseCode in 200..299) {
-                                conn.inputStream.use { loaded = BitmapFactory.decodeStream(it) }
+                                conn.inputStream.use { stream ->
+                                    BitmapFactory.decodeStream(stream)?.let { loaded = source to it }
+                                }
                             }
                         } finally {
                             conn.disconnect()
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (_: Exception) {
                         loaded = null
                     }
@@ -223,12 +235,30 @@ fun AsyncImage(
             }
             loaded
         }
+        if (image == null) currentOnError?.invoke()
     }
 
-    if (bitmap != null) {
-        Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = contentDescription, modifier = modifier)
+    val loaded = image
+    if (loaded != null) {
+        Image(
+            bitmap = loaded.second.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
+            modifier = if (onClick != null && loaded.first == url) {
+                modifier.clickable(onClickLabel = "Enlarge image", onClick = onClick)
+            } else modifier
+        )
     } else {
-        Box(modifier = modifier.background(Color.DarkGray))
+        Box(
+            modifier = modifier.background(Color.DarkGray).semantics {
+                if (placeholder != null) this.contentDescription = placeholder
+            },
+            contentAlignment = Alignment.Center
+        ) {
+            if (placeholder != null) {
+                Text(placeholder, color = Color.LightGray, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
+            }
+        }
     }
 }
 

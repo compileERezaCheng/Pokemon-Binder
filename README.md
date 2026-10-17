@@ -31,6 +31,9 @@ A highly visual,immersive digital card album manager for your desktop.
 *   **🔄 Auto-Sync on Refresh**: Automatically pulls new cards from your mobile app whenever you open or refresh the page (with a 5-minute cooldown to save quota).
 *   **☁️ Multi-Cloud Support**: Synchronize with **Firebase** for mobile connectivity and **Google Sheets** for spreadsheet-style management.
 
+### Card image fallback
+TCGdex remains the primary image source. When its image is missing or fails, the apps query Scrydex and accept an image only when the set name, collector number, English language, and card variant identify one result. The Scrydex API can be called without credentials, with reduced rate limits. For higher PC API limits, set `SCRYDEX_API_KEY` and `SCRYDEX_TEAM_ID` in the Windows environment before starting the app; keep both values out of source control and the Android APK. The Android app never embeds these credentials. If no exact match exists, the app keeps the “Imagem indisponível” placeholder. Scrydex notes that Pokémon card artwork is third-party content; see its [terms](https://scrydex.com/terms) and [authentication guide](https://scrydex.com/docs/getting-started/authentication).
+
 ---
 
 ## 🚀 Getting Started

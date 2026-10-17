@@ -19,7 +19,7 @@ function loadApp() {
         window: {},
         setInterval() {}
     };
-    vm.runInNewContext(`${source}\nglobalThis.api = { filterCollectionCards, changePage, jumpToPage, page: () => currentPage, pageNavigationState, getCardImageSource, calculateRank, chooseUniqueCatalogCard, stubRender: () => { renderBinderGrid = () => {}; } };`, context);
+        vm.runInNewContext(`${source}\nglobalThis.api = { filterCollectionCards, changePage, jumpToPage, page: () => currentPage, pageNavigationState, getCardImageSource, calculateRank, chooseUniqueCatalogCard, isPokemonCardNameMatch, catalogImageUrl: typeof catalogImageUrl === "function" ? catalogImageUrl : null, resolveCatalogImageUrl: typeof resolveCatalogImageUrl === "function" ? resolveCatalogImageUrl : null, stubRender: () => { renderBinderGrid = () => {}; } };`, context);
     return context.api;
 }
 
@@ -45,6 +45,7 @@ function fakeElement(tagName = 'div') {
         getAttribute(name) { return attributes[name] ?? null; },
         setAttribute(name, value) { attributes[name] = String(value); },
         addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
+        async dispatch(name) { await Promise.all((listeners[name] || []).map(callback => callback({ target: this }))); },
         appendChild(child) { this.children.push(child); return child; },
         append(...children) { children.forEach(child => this.appendChild(child)); },
         replaceChildren(...children) { this.children = []; this.textContent = ''; children.forEach(child => this.appendChild(child)); },
@@ -108,8 +109,8 @@ function loadInteractiveApp(fetchOverride) {
         if (String(url).includes('/cards?name=')) {
             const name = decodeURIComponent(String(url).split('name=')[1]);
             return jsonResponse(name === 'pikachu' ? [
-                { id: 'base1-25', name: 'Pikachu', localId: '25', image: 'https://assets.tcgdex.net/en/base/base1/25' },
-                { id: 'neo3-12', name: 'Pikachu', localId: '12', image: 'https://assets.tcgdex.net/en/neo/neo3/12' }
+                { id: 'neo3-12', name: 'Pikachu', localId: '12', image: 'https://assets.tcgdex.net/en/neo/neo3/12' },
+                { id: 'base1-25', name: 'Pikachu', localId: '25', image: 'https://assets.tcgdex.net/en/base/base1/25' }
             ] : []);
         }
         if (String(url).endsWith('/sets')) return jsonResponse([{ id: 'base1', name: 'Base' }, { id: 'neo3', name: 'Neo Revelation' }]);
@@ -131,10 +132,20 @@ function loadInteractiveApp(fetchOverride) {
     vm.runInNewContext(`${source}
 showToast = () => {};
 globalThis.api = {
-    searchCatalogCards, chooseCatalogCard, clearAddCatalogCard, resetAddCardForm, submitAddCard,
+    searchCatalogCards, chooseCatalogCard, filterCatalogOptions, clearAddCatalogCard, resetAddCardForm, submitAddCard,
     selectPokemonCustom, updatePreviewRarity, loadPokemonDb, handleAutocomplete,
     setPokemon: pokemon => { selectedPokemon = pokemon; },
-    state: () => ({ selectedPokemon, selectedCatalogCard, modalSelectedCatalogCard }),
+    state: () => ({ selectedPokemon, selectedCatalogCard, modalSelectedCatalogCard, modalSavedCatalogCard: typeof modalSavedCatalogCard === "undefined" ? null : modalSavedCatalogCard }),
+    catalogImageUrl: typeof catalogImageUrl === "function" ? catalogImageUrl : null,
+    resolveCatalogImageUrl: typeof resolveCatalogImageUrl === "function" ? resolveCatalogImageUrl : null,
+    resolveCatalogImageFallback: typeof resolveCatalogImageFallback === "function" ? resolveCatalogImageFallback : null,
+    loadModalCatalogOptions: typeof loadModalCatalogOptions === "function" ? loadModalCatalogOptions : null,
+    setModalSelectionForTest: card => { modalSelectedCatalogCard = card; updateModalPrintingUi(); },
+    cancelModalCatalogSelection: typeof cancelModalCatalogSelection === "function" ? cancelModalCatalogSelection : null,
+    openModalPrintingPicker: typeof openModalPrintingPicker === "function" ? openModalPrintingPicker : null,
+    renderModalArtwork: typeof renderModalArtwork === "function" ? renderModalArtwork : null,
+    openModalImageViewer: typeof openModalImageViewer === "function" ? openModalImageViewer : null,
+    closeModalImageViewer: typeof closeModalImageViewer === "function" ? closeModalImageViewer : null,
     pokemonLookup: () => pokemonLookupList,
     revisions: () => ({ add: catalogSearchRevision, modal: modalCatalogRevision })
 };`, context);
@@ -249,8 +260,9 @@ test('file pickers and selects use binder styling and the add-card Pokéball fil
     assert.match(styles, /(^|\n)select\s*\{[^}]*appearance:\s*none/s);
     assert.match(styles, /select option\s*\{[^}]*background-color:/s);
     assert.match(styles, /\.card-placeholder-pokeball\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*display:\s*grid;[^}]*place-items:\s*center;/s);
-    assert.match(styles, /\.catalog-options\s*\{[^}]*max-height:\s*360px/s);
-    assert.match(styles, /\.catalog-option img\s*\{[^}]*width:\s*80px;[^}]*height:\s*112px;/s);
+    assert.match(styles, /\.catalog-options\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit/s);
+    assert.match(styles, /\.catalog-options\s*\{[^}]*max-height:\s*min\(52vh, 470px\)/s);
+    assert.match(styles, /\.catalog-option-art\s*\{[^}]*aspect-ratio:\s*8 \/ 11/s);
 });
 
 test('combined rank uses the same rarity scale and threshold boundaries', () => {
@@ -286,14 +298,34 @@ test('catalog matching refuses ambiguous editions and distinguishes set numbers'
 test('desktop set picker and grading details have accessible closed defaults', () => {
     assert.match(html, /id="add-set-options"[^>]*role="listbox"/);
     assert.match(html, /id="modal-set-options"[^>]*role="listbox"/);
+    assert.match(html, /id="add-set-search"[^>]*type="search"[^>]*oninput="filterCatalogOptions/);
+    assert.match(html, /id="modal-set-search"[^>]*type="search"[^>]*oninput="filterCatalogOptions/);
+    assert.match(styles, /\.catalog-option\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
     assert.match(html, /<details[^>]*id="modal-grade-details"/);
     assert.doesNotMatch(html.match(/<details[^>]*id="modal-grade-details"[^>]*>/)?.[0] || '', /\bopen\b/);
+});
+
+test('edition search uses the same input styling as the add-card form', () => {
+    assert.ok(/\.form-group input,\s*\.form-group select,\s*\.catalog-search\s*\{[^}]*background-color:\s*var\(--bg-input\);[^}]*border-radius:\s*var\(--radius-md\);/s.test(styles),
+        'edition search inputs should share the add-card field theme');
 });
 
 test('printing candidates stay selectable, and clearing a print preserves the Pokémon form', async () => {
     const app = loadInteractiveApp();
     await preparePikachu(app);
     const list = app.elements.get('add-set-options');
+    assert.deepEqual(
+        list.children.map(option => option.children.at(-1).children[0].textContent),
+        ['Base', 'Neo Revelation']
+    );
+    app.api.filterCatalogOptions('add-set-options', 'neo');
+    assert.deepEqual(list.children.map(option => option.hidden), [true, false]);
+    assert.equal(app.elements.get('add-set-search-empty').classList.contains('hidden'), true);
+    app.api.filterCatalogOptions('add-set-options', 'missing');
+    assert.equal(app.elements.get('add-set-search-empty').classList.contains('hidden'), false);
+    app.api.filterCatalogOptions('add-set-options', '');
+    assert.deepEqual(list.children.map(option => option.hidden), [false, false]);
+    assert.equal(app.elements.get('add-set-search-empty').classList.contains('hidden'), true);
     const page = app.document.getElementById('add-page');
     const slot = app.document.getElementById('add-slot');
     const condition = app.document.getElementById('add-condition');
@@ -354,6 +386,150 @@ test('modal printing choices also remain available after selecting one', async (
     assert.equal(list.children[0].getAttribute('aria-selected'), 'true');
     await list.children[1].click();
     assert.equal(app.api.state().modalSelectedCatalogCard.id, 'neo3-12');
+});
+
+test('catalog image URLs use documented card sizes and only exact printing paths', () => {
+    const api = loadApp();
+    assert.equal(typeof api.catalogImageUrl, 'function');
+    assert.equal(typeof api.resolveCatalogImageUrl, 'function');
+    assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/136', 'low'),
+        'https://assets.tcgdex.net/en/swsh/swsh3/136/low.webp');
+    assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/136/high.png', 'high'),
+        'https://assets.tcgdex.net/en/swsh/swsh3/136/high.png');
+    assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/logo', 'high'), '');
+    assert.equal(api.resolveCatalogImageUrl({ id: 'mep-027', localId: '027', set: { id: 'mep' } }, {
+        mep: { seriesId: 'me' }
+    }), 'https://assets.tcgdex.net/en/me/mep/027/low.webp');
+    assert.equal(api.resolveCatalogImageUrl({ id: 'swsh11.5tg-TG16', localId: 'TG16', set: { id: 'swsh11.5tg', serie: { id: 'swsh' } } }),
+        'https://assets.tcgdex.net/en/swsh/swsh11/TG16/low.webp');
+    assert.equal(api.resolveCatalogImageUrl({ id: 'P-A-084', localId: '084' }, { 'P-A': { seriesId: 'sv' } }),
+        'https://assets.tcgdex.net/en/sv/P-A/084/low.webp');
+    assert.equal(api.resolveCatalogImageUrl({ id: 'missing-7', localId: '7', set: { id: 'missing' } }), '');
+});
+
+test('printing options keep their placeholder visible until an image loads', async () => {
+    const app = loadInteractiveApp();
+    await preparePikachu(app, 'modal-set-options');
+    const art = app.elements.get('modal-set-options').children[0].children[0];
+    const [placeholder, image] = art.children;
+
+    assert.equal(placeholder.textContent, 'A carregar imagem…');
+    assert.equal(image.classList.contains('hidden'), true);
+    await image.dispatch('error');
+    assert.equal(placeholder.textContent, 'Imagem indisponível');
+    assert.equal(placeholder.classList.contains('hidden'), false);
+    assert.equal(image.classList.contains('hidden'), true);
+});
+
+test('modal keeps the saved printing until a pending change is saved or cancelled', async () => {
+    const app = loadInteractiveApp();
+    assert.equal(typeof app.api.loadModalCatalogOptions, 'function');
+    assert.equal(typeof app.api.cancelModalCatalogSelection, 'function');
+    const saved = {
+        Name: 'pikachu', 'Dex Number': 25, Page: 4, Slot: 7, Condition: 'NM', Type: 'Rare',
+        'Date Added': '2026-01-01', 'Catalog Card ID': 'base1-25', 'Set ID': 'base1',
+        'Set Name': 'Base', 'Card Number': '25', 'Catalog Rarity': 'Rare',
+        'Image URL': 'https://assets.tcgdex.net/en/base/base1/25/high.png', 'Image Source': 'TCGdex'
+    };
+    await app.api.loadModalCatalogOptions(saved);
+    const list = app.elements.get('modal-set-options');
+    assert.equal(app.api.state().modalSavedCatalogCard.id, 'base1-25');
+    assert.equal(app.api.state().modalSelectedCatalogCard.id, 'base1-25');
+    assert.equal(app.elements.get('modal-save-set').disabled, true);
+
+    await list.children[1].click();
+    assert.equal(app.api.state().modalSavedCatalogCard.id, 'base1-25');
+    assert.equal(app.api.state().modalSelectedCatalogCard.id, 'neo3-12');
+    assert.equal(app.elements.get('modal-save-set').disabled, false);
+    assert.match(app.elements.get('modal-pending-set').textContent, /por guardar/i);
+
+    app.api.cancelModalCatalogSelection();
+    assert.equal(app.api.state().modalSavedCatalogCard.id, 'base1-25');
+    assert.equal(app.api.state().modalSelectedCatalogCard.id, 'base1-25');
+    assert.equal(app.elements.get('modal-save-set').disabled, true);
+    assert.equal(list.children[0].getAttribute('aria-selected'), 'true');
+    assert.equal(list.children[1].getAttribute('aria-selected'), 'false');
+
+    app.api.setModalSelectionForTest({ ...app.api.state().modalSavedCatalogCard,
+        imageUrl: 'https://images.scrydex.com/pokemon/scrydex-base1-25/large',
+        imageSource: 'Scrydex', imageMatchId: 'scrydex-base1-25'
+    });
+    assert.equal(app.elements.get('modal-save-set').disabled, false);
+    assert.equal(app.api.state().modalSavedCatalogCard.imageSource, 'TCGdex');
+    app.api.cancelModalCatalogSelection();
+    assert.equal(app.api.state().modalSelectedCatalogCard.imageSource, 'TCGdex');
+    assert.equal(app.elements.get('modal-save-set').disabled, true);
+});
+
+test('only successfully loaded card artwork can open the enlarged viewer', () => {
+    const app = loadInteractiveApp();
+    assert.equal(typeof app.api.renderModalArtwork, 'function');
+    app.api.renderModalArtwork('https://assets.tcgdex.net/en/base/base1/25/low.webp', true);
+    app.elements.get('modal-card-artwork-image').onload();
+    assert.equal(app.elements.get('modal-card-artwork-button').disabled, false);
+    app.api.openModalImageViewer();
+    assert.equal(app.elements.get('modal-image-viewer').classList.contains('hidden'), false);
+    app.api.closeModalImageViewer();
+
+    app.api.renderModalArtwork('https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png', false);
+    app.elements.get('modal-card-artwork-image').onload();
+    assert.equal(app.elements.get('modal-card-artwork-button').disabled, true);
+    app.api.openModalImageViewer();
+    assert.equal(app.elements.get('modal-image-viewer').classList.contains('hidden'), true);
+});
+
+test('detail modal reserves card artwork space and keeps edition choices collapsed', () => {
+    assert.match(html, /id="modal-card-artwork-image"/);
+    assert.match(html, /Imagem indisponível/);
+    assert.match(html, /id="modal-set-picker"[^>]*class="[^"]*hidden/);
+    assert.match(html, /Alterar edição/);
+    assert.match(html, /Adicionar uma nota…/);
+    assert.doesNotMatch(html, /Detail Specs|No TCGdex printing selected/);
+    assert.match(styles, /\.catalog-options\s*\{[^}]*grid-template-columns/s);
+    assert.match(styles, /\.modal-card-artwork\s*\{[^}]*aspect-ratio/s);
+});
+
+test('catalog search includes ex and Mega variants without matching unrelated names', () => {
+    const api = loadApp();
+    assert.equal(api.isPokemonCardNameMatch('Charizard ex', 'Charizard'), true);
+    assert.equal(api.isPokemonCardNameMatch('Mega Charizard X ex', 'Charizard'), true);
+    assert.equal(api.isPokemonCardNameMatch('M Charizard-EX', 'Charizard'), true);
+    assert.equal(api.isPokemonCardNameMatch('Charizard Spirit Link', 'Charizard'), false);
+    assert.equal(api.isPokemonCardNameMatch('Charizardite ex', 'Charizard'), false);
+});
+
+test('missing TCGdex art resolves once to the cached Scrydex association', async () => {
+    let lookups = 0;
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === '/api/catalog-image-fallback') {
+            lookups++;
+            return Promise.resolve({ ok: true, json: async () => ({ success: true, match: {
+                card_id: 'scrydex-base1-25', image_url: 'https://images.scrydex.com/pokemon/scrydex-base1-25/large'
+            } }) });
+        }
+        return fallback(url, options);
+    });
+
+    const first = await app.api.resolveCatalogImageFallback({ id: 'base1-25' });
+    const second = await app.api.resolveCatalogImageFallback({ id: 'base1-25' });
+
+    assert.equal(first.imageSource, 'Scrydex');
+    assert.equal(first.imageMatchId, 'scrydex-base1-25');
+    assert.equal(first.imageUrl, 'https://images.scrydex.com/pokemon/scrydex-base1-25/large');
+    assert.deepEqual(JSON.parse(JSON.stringify(second)), JSON.parse(JSON.stringify(first)));
+    assert.equal(lookups, 1);
+});
+
+test('detail modal exposes edit controls and overlays the grade inside the rank symbol', () => {
+    assert.match(html, /id="modal-edit-details"/);
+    assert.match(html, /id="modal-edit-form"[^>]*class="[^"]*hidden/);
+    assert.match(html, /id="modal-edit-name"/);
+    assert.match(html, /id="modal-edit-page"/);
+    assert.match(html, /id="modal-edit-slot"/);
+    assert.match(html, /id="modal-edit-rarity"/);
+    assert.match(html, /id="modal-card-rank-grade"/);
+    assert.match(styles, /\.card-rank-overlay[^}]*clip-path/s);
+    assert.match(styles, /\.modal-pokemon-type[^}]*rarity/s);
 });
 
 test('catalog rarity, editable form rarity, preview, and save payload stay in sync', async () => {

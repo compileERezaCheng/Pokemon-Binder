@@ -410,7 +410,9 @@ fun ScanScreen(
                                     catalogRarity = selectedCatalogCard?.rarity.orEmpty(),
                                     dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                                     grade = resolvedGrade,
-                                    imageUrl = selectedCatalogCard?.imageUrl?.takeIf { it.isNotBlank() } ?: resolvedImageUrl
+                                    imageUrl = selectedCatalogCard?.imageUrl?.takeIf { it.isNotBlank() } ?: resolvedImageUrl,
+                                    imageSource = selectedCatalogCard?.imageSource.orEmpty(),
+                                    imageMatchId = selectedCatalogCard?.imageMatchId.orEmpty()
                                 )
                                 // No training-photo upload without an explicit opt-in flow.
                                 if (repository.addCard(card)) {

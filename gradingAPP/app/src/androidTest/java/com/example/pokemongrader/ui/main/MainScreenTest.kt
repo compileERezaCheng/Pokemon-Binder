@@ -126,7 +126,7 @@ class MainScreenTest {
       MainScreen(
         repository = fakeRepository,
         onNavigateToScan = {},
-        onNavigateToCardDetails = { _, _, _ -> },
+        onNavigateToCardDetails = { _, _, _, _ -> },
         onNavigateToAccountSettings = {},
         activeTab = activeTab.value,
         onActiveTabChange = { activeTab.value = it },
@@ -154,7 +154,7 @@ class MainScreenTest {
       MainScreen(
         repository = fakeRepository,
         onNavigateToScan = {},
-        onNavigateToCardDetails = { _, _, _ -> },
+        onNavigateToCardDetails = { _, _, _, _ -> },
         onNavigateToAccountSettings = {},
         activeTab = activeTab.value,
         onActiveTabChange = { activeTab.value = it },
@@ -257,7 +257,7 @@ private fun StatefulMainScreen(
   MainScreen(
     repository = repository,
     onNavigateToScan = onNavigateToScan,
-    onNavigateToCardDetails = onNavigateToCardDetails,
+    onNavigateToCardDetails = { page, slot, date, _ -> onNavigateToCardDetails(page, slot, date) },
     onNavigateToAccountSettings = onNavigateToAccountSettings,
     activeTab = activeTab.value,
     onActiveTabChange = { activeTab.value = it },
@@ -292,6 +292,7 @@ private class FakeDataRepository(initialCards: List<Card>) : DataRepository {
   override suspend fun login(email: String, password: String): Boolean = true
   override suspend fun register(email: String, password: String): Boolean = true
   override suspend fun addCard(card: Card): Boolean = true
+  override suspend fun updateCard(card: Card): Boolean = true
   override suspend fun removeCard(card: Card): Boolean = true
   override suspend fun fetchRemote(): Boolean = true
   override suspend fun refreshAndFetch(): Boolean {

@@ -163,6 +163,32 @@ class BackendDataTests(TemporaryBinderTest):
 
         self.assertEqual(image_url, pokemon_binder.load_collection()[0].get("Image URL"))
 
+    def test_scrydex_match_requires_same_set_number_language_and_variant(self):
+        tcgdex = {
+            "id": "me1-084", "name": "M Charizard-EX", "localId": "084",
+            "stage": "MEGA", "suffix": "EX",
+            "set": {"id": "me1", "name": "Mega Evolution"},
+        }
+        correct = {
+            "id": "scrydex-card-84", "name": "M Charizard-EX", "number": "84",
+            "printed_number": "084/132", "language_code": "EN", "subtypes": ["MEGA"],
+            "expansion": {"id": "different-id", "name": "Mega Evolution"},
+            "images": [{"type": "front", "large": "https://images.scrydex.com/pokemon/scrydex-card-84/large"}],
+        }
+        wrong_set = {**correct, "expansion": {"id": "me1", "name": "Another set"}}
+        wrong_number = {**correct, "number": "85", "printed_number": "085/132"}
+        wrong_language = {**correct, "language_code": "JA"}
+        wrong_variant = {**correct, "name": "Charizard ex", "subtypes": []}
+
+        match = pokemon_server.match_scrydex_card(
+            tcgdex, {"data": [wrong_set, wrong_number, wrong_language, wrong_variant, correct], "totalCount": 5}
+        )
+
+        self.assertEqual({"card_id": "scrydex-card-84", "image_url": correct["images"][0]["large"]}, match)
+        self.assertIsNone(pokemon_server.match_scrydex_card(
+            tcgdex, {"data": [correct, {**correct, "id": "duplicate"}], "totalCount": 2}
+        ))
+
     def test_catalog_and_grade_metadata_survive_csv_reload(self):
         details = json.dumps({"assessable": True, "criteria": {"centering": {"score": 8, "evidence": "even"}}})
         metadata = {
@@ -254,14 +280,58 @@ class BinderApiTests(TemporaryBinderTest):
             "copy_id": before["Copy ID"], "page": before["Page"], "slot": before["Slot"], "name": before["Name"],
             "date_added": before["Date Added"], "catalog_card_id": "neo3-12",
             "set_id": "neo3", "set_name": "Neo Revelation", "card_number": "12",
-            "catalog_rarity": "Rare", "image_url": "https://assets.tcgdex.net/en/neo/neo3/12/low.webp",
+            "catalog_rarity": "Rare", "image_url": "https://images.scrydex.com/pokemon/scrydex-card-12/large",
+            "image_source": "Scrydex", "image_match_id": "scrydex-card-12",
         })
         self.assertEqual(200, status, updated)
         after = pokemon_binder.load_collection()[0]
         self.assertEqual(("neo3-12", "neo3", "12"), (after["Catalog Card ID"], after["Set ID"], after["Card Number"]))
+        self.assertEqual(("Scrydex", "scrydex-card-12"), (after["Image Source"], after["Image Match ID"]))
+        self.assertEqual("https://images.scrydex.com/pokemon/scrydex-card-12/large", after["Image URL"])
         self.assertEqual(before["Type"], after["Type"])
         for key in ("Page", "Slot", "Date Added", "Notes", "Grade", "Grade Details"):
             self.assertEqual(before[key], after[key], key)
+
+    def test_notes_update_preserves_the_saved_catalog_printing(self):
+        _, added = self.request_json("/api/add", {
+            "name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7, "type": "Rare Holo",
+            "condition": "LP", "notes": "old note", "catalog_card_id": "base1-25",
+            "set_id": "base1", "set_name": "Base", "card_number": "25",
+            "catalog_rarity": "Rare Holo", "image_url": "https://assets.tcgdex.net/en/base/base1/25/low.webp",
+        })
+        self.assertTrue(added["success"])
+        before = pokemon_binder.load_collection()[0]
+
+        status, updated = self.request_json("/api/update-card", {"copy_id": before["Copy ID"], "notes": "new note"})
+
+        self.assertEqual(200, status, updated)
+        after = pokemon_binder.load_collection()[0]
+        self.assertEqual("new note", after["Notes"])
+        for key in ("Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Image URL"):
+            self.assertEqual(before[key], after[key], key)
+
+    def test_card_details_update_edits_copy_fields_without_replacing_identity(self):
+        _, added = self.request_json("/api/add", {
+            "name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7, "type": "Rare",
+            "condition": "LP", "notes": "keep this", "grade": 8.5, "catalog_rarity": "Rare",
+        })
+        before = added["card"]
+
+        status, updated = self.request_json("/api/update-card", {
+            "copy_id": before["Copy ID"], "name": "Raichu", "page": 4, "slot": 2,
+            "condition": "NM", "type": "Ultra Rare", "grade": 9.5,
+            "date_added": "2026-10-16 12:30:00",
+        })
+
+        self.assertEqual(200, status, updated)
+        saved = pokemon_binder.load_collection()[0]
+        self.assertEqual(("Raichu", 4, 2, "NM", "Ultra Rare", "9.5"), (
+            saved["Name"], saved["Page"], saved["Slot"], saved["Condition"], saved["Type"], saved["Grade"]
+        ))
+        self.assertEqual(before["Copy ID"], saved["Copy ID"])
+        self.assertEqual("2026-10-16 12:30:00", saved["Date Added"])
+        self.assertEqual("keep this", saved["Notes"])
+        self.assertEqual("Rare", saved["Catalog Rarity"])
 
     def test_pokemon_database_response_is_not_cached_by_the_browser(self):
         with patch.object(pokemon_binder, "load_pokemon_database", return_value={"pikachu": {"id": 25}}):

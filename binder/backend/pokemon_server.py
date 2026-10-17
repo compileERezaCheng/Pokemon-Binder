@@ -7,6 +7,8 @@ import sys
 import urllib.parse
 import math
 import uuid
+import re
+import unicodedata
 from datetime import datetime
 
 # Add the current directory to sys.path so we can import local modules
@@ -40,6 +42,8 @@ DATA_DIR = pokemon_binder.DATA_DIR
 PORT = 8080
 _SINGLE_INSTANCE_HANDLE = None
 INSTANCE_TOKEN = os.environ.get('POKEMON_BINDER_INSTANCE', '')
+SCRYDEX_API = "https://api.scrydex.com/pokemon/v1/en/cards"
+_scrydex_image_cache = {}
 PUBLIC_SETTINGS = {
     'rows', 'cols', 'mode', 'gsheet_enabled', 'gsheet_name', 'firebase_enabled',
     'firebase_email', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
@@ -54,9 +58,142 @@ def public_settings(config):
 def valid_catalog_image_url(value):
     try:
         parsed = urllib.parse.urlsplit(str(value or "").strip())
-        return parsed.scheme == "https" and parsed.hostname == "assets.tcgdex.net" and parsed.port in (None, 443) and not parsed.username and not parsed.password and parsed.path.startswith("/")
+        if parsed.scheme != "https" or parsed.port not in (None, 443) or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            return False
+        if parsed.hostname == "assets.tcgdex.net":
+            return bool(re.fullmatch(r"/[a-z]{2}(?:-[a-z]{2})?/[^/]+/[^/]+/[^/]+(?:/(?:low|high)\.(?:webp|png|jpe?g))?", parsed.path, re.IGNORECASE))
+        return parsed.hostname == "images.scrydex.com" and bool(re.fullmatch(r"/pokemon/[^/]+/(?:small|medium|large)", parsed.path))
     except ValueError:
         return False
+
+
+def valid_catalog_image_metadata(url, source="", match_id=""):
+    url = str(url or "").strip()
+    if not valid_catalog_image_url(url):
+        return "", "", ""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.hostname == "assets.tcgdex.net":
+        return url, "TCGdex", ""
+    parts = parsed.path.split("/")
+    card_id = urllib.parse.unquote(parts[2]) if len(parts) == 4 else ""
+    if source not in ("", "Scrydex") or not card_id or match_id not in ("", card_id):
+        return "", "", ""
+    return url, "Scrydex", card_id
+
+
+def _match_text(value):
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value.lower()).split())
+
+
+def _number_key(value):
+    value = str(value or "").strip().split("/", 1)[0].strip().upper()
+    return str(int(value)) if value.isdigit() else value
+
+
+def _card_identity(card, source):
+    name = str(card.get("name") or "")
+    tokens = _match_text(name).split()
+    variants = set()
+    if tokens and tokens[0] in ("m", "mega"):
+        variants.add("mega")
+        tokens.pop(0)
+    if tokens and tokens[-1] in {"ex", "gx", "v", "vmax", "vstar", "break"}:
+        variants.add(tokens.pop())
+    if "mega" in _match_text(card.get("stage")) or "mega" in _match_text(card.get("subtype")):
+        variants.add("mega")
+    suffix = _match_text(card.get("suffix"))
+    if suffix in {"ex", "gx", "v", "vmax", "vstar", "break"}:
+        variants.add(suffix)
+    if source == "scrydex":
+        for subtype in card.get("subtypes") or []:
+            subtype = _match_text(subtype)
+            if subtype in {"mega", "ex", "gx", "v", "vmax", "vstar", "break"}:
+                variants.add(subtype)
+    if "mega" in variants and tokens and tokens[-1] in ("x", "y"):
+        tokens.pop()
+    return " ".join(tokens), frozenset(variants)
+
+
+def match_scrydex_card(tcgdex_card, response):
+    """Return only one exact set/number/language/card-variant match."""
+    if not isinstance(tcgdex_card, dict) or not isinstance(response, dict):
+        return None
+    set_data = tcgdex_card.get("set") or {}
+    set_name = _match_text(set_data.get("name"))
+    number = _number_key(tcgdex_card.get("localId"))
+    identity = _card_identity(tcgdex_card, "tcgdex")
+    cards = response.get("data")
+    if not set_name or not number or not identity[0] or not isinstance(cards, list):
+        return None
+    total = response.get("totalCount")
+    if len(cards) > 100 or (isinstance(total, int) and total > len(cards)):
+        return None
+
+    matches = []
+    for candidate in cards:
+        if not isinstance(candidate, dict):
+            continue
+        expansion = candidate.get("expansion") or {}
+        language = _match_text(candidate.get("language_code") or expansion.get("language_code"))
+        numbers = [_number_key(candidate.get(key)) for key in ("number", "printed_number") if candidate.get(key)]
+        if (
+            _match_text(expansion.get("name")) == set_name
+            and language == "en"
+            and numbers
+            and all(value == numbers[0] for value in numbers)
+            and numbers[0] == number
+            and _card_identity(candidate, "scrydex") == identity
+        ):
+            matches.append(candidate)
+    if len(matches) != 1:
+        return None
+    candidate = matches[0]
+    card_id = str(candidate.get("id") or "")
+    images = candidate.get("images") or []
+    image = next((item.get("large") for item in images if isinstance(item, dict) and item.get("type") == "front"), "")
+    try:
+        path = urllib.parse.urlsplit(image).path
+    except ValueError:
+        path = ""
+    return {"card_id": card_id, "image_url": image} if card_id and valid_catalog_image_url(image) and path == f"/pokemon/{card_id}/large" else None
+
+
+def resolve_scrydex_image(tcgdex_id):
+    tcgdex_id = str(tcgdex_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", tcgdex_id):
+        return None
+    if tcgdex_id in _scrydex_image_cache:
+        return _scrydex_image_cache[tcgdex_id]
+    try:
+        request = urllib.request.Request(f"https://api.tcgdex.net/v2/en/cards/{urllib.parse.quote(tcgdex_id, safe='')}", headers={"User-Agent": "PokemonBinder/1.0"})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            tcgdex_card = json.loads(response.read().decode("utf-8"))
+        set_name = str((tcgdex_card.get("set") or {}).get("name") or "").strip()
+        number = _number_key(tcgdex_card.get("localId"))
+        if not set_name or not number:
+            _scrydex_image_cache[tcgdex_id] = None
+            return None
+        escaped_set_name = set_name.replace("\\", "\\\\").replace('"', '\\"')
+        query = f'!expansion.name:"{escaped_set_name}" !number:"{number}"'
+        params = urllib.parse.urlencode({
+            "q": query, "page_size": 100,
+            "select": "id,name,number,printed_number,language_code,subtypes,expansion,images",
+        })
+        headers = {"User-Agent": "PokemonBinder/1.0"}
+        api_key = os.environ.get("SCRYDEX_API_KEY", "").strip()
+        team_id = os.environ.get("SCRYDEX_TEAM_ID", "").strip()
+        if api_key and team_id:
+            headers.update({"X-Api-Key": api_key, "X-Team-ID": team_id})
+        request = urllib.request.Request(f"{SCRYDEX_API}?{params}", headers=headers)
+        with urllib.request.urlopen(request, timeout=8) as response:
+            catalog = json.loads(response.read().decode("utf-8"))
+        match = match_scrydex_card(tcgdex_card, catalog)
+        _scrydex_image_cache[tcgdex_id] = match
+        return match
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
 
 class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def allowed_request(self, write=False):
@@ -156,6 +293,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.handle_add_card(data)
         elif path == '/api/update-card':
             self.handle_update_card(data)
+        elif path == '/api/catalog-image-fallback':
+            match = resolve_scrydex_image(data.get("tcgdex_card_id"))
+            self.send_json({"success": True, "match": match})
         elif path == '/api/remove':
             self.handle_remove_card(data)
         elif path == '/api/sync':
@@ -413,13 +553,18 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         notes = data.get("notes", "").strip()
         card_type = data.get("type", "Normal").strip()
         image_url = data.get("image_url", "").strip()
+        image_source = str(data.get("image_source") or "").strip()
+        image_match_id = str(data.get("image_match_id") or "").strip()
+        image_url, image_source, image_match_id = valid_catalog_image_metadata(image_url, image_source, image_match_id)
         catalog_fields = {
             "Catalog Card ID": str(data.get("catalog_card_id") or "").strip(),
             "Set ID": str(data.get("set_id") or "").strip(),
             "Set Name": str(data.get("set_name") or "").strip(),
             "Card Number": str(data.get("card_number") or "").strip(),
             "Catalog Rarity": str(data.get("catalog_rarity") or "").strip(),
-            "Image URL": image_url if valid_catalog_image_url(image_url) else "",
+            "Image URL": image_url,
+            "Image Source": image_source,
+            "Image Match ID": image_match_id,
         }
         raw_grade = data.get("grade")
         if isinstance(raw_grade, bool):
@@ -513,15 +658,74 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         card = matches[0]
-        image_url = str(data.get("image_url") or "").strip()
-        card.update({
-            "Catalog Card ID": str(data.get("catalog_card_id") or "").strip(),
-            "Set ID": str(data.get("set_id") or "").strip(),
-            "Set Name": str(data.get("set_name") or "").strip(),
-            "Card Number": str(data.get("card_number") or "").strip(),
-            "Catalog Rarity": str(data.get("catalog_rarity") or "").strip(),
-            "Image URL": image_url if valid_catalog_image_url(image_url) else "",
-        })
+        if "name" in data:
+            name = str(data.get("name") or "").strip()
+            if not name:
+                self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
+                return
+            card["Name"] = name
+        if "dex_id" in data:
+            try:
+                dex_id = int(data.get("dex_id") or 0)
+                if dex_id < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                self.send_json({"success": False, "error": "Pokédex number must be zero or greater"}, status=400)
+                return
+            card["Dex Number"] = dex_id
+        if "date_added" in data:
+            date_added = str(data.get("date_added") or "").strip().replace("T", " ")
+            try:
+                datetime.strptime(date_added, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                self.send_json({"success": False, "error": "Date added must include a date and time"}, status=400)
+                return
+            card["Date Added"] = date_added
+        for field, column in (("page", "Page"), ("slot", "Slot")):
+            if field in data:
+                try:
+                    value = int(data[field])
+                    if value < 1:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    self.send_json({"success": False, "error": f"{column} must be at least 1"}, status=400)
+                    return
+                card[column] = value
+        if "condition" in data:
+            condition = str(data.get("condition") or "").strip().upper()
+            if condition not in {"NM", "LP", "MP", "HP"}:
+                self.send_json({"success": False, "error": "Invalid card condition"}, status=400)
+                return
+            card["Condition"] = condition
+        if "type" in data:
+            card["Type"] = str(data.get("type") or "Normal").strip() or "Normal"
+        if "grade" in data:
+            raw_grade = data.get("grade")
+            if raw_grade in (None, ""):
+                card["Grade"] = ""
+            else:
+                try:
+                    grade = float(raw_grade)
+                    if isinstance(raw_grade, bool) or not math.isfinite(grade) or not 1 <= grade <= 10:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    self.send_json({"success": False, "error": "Grade must be between 1 and 10"}, status=400)
+                    return
+                card["Grade"] = str(grade)
+            card["Grade Details"] = ""
+        if "notes" in data:
+            card["Notes"] = str(data.get("notes") or "").strip()
+        catalog_fields = ("catalog_card_id", "set_id", "set_name", "card_number", "catalog_rarity", "image_url", "image_source", "image_match_id")
+        if any(field in data for field in catalog_fields):
+            for field, column in (("catalog_card_id", "Catalog Card ID"), ("set_id", "Set ID"), ("set_name", "Set Name"), ("card_number", "Card Number"), ("catalog_rarity", "Catalog Rarity")):
+                if field in data:
+                    card[column] = str(data.get(field) or "").strip()
+            if any(field in data for field in ("image_url", "image_source", "image_match_id")):
+                image_url = str(data.get("image_url", card.get("Image URL", "")) or "").strip()
+                image_source = str(data.get("image_source", card.get("Image Source", "")) or "").strip()
+                image_match_id = str(data.get("image_match_id", card.get("Image Match ID", "")) or "").strip()
+                image_url, image_source, image_match_id = valid_catalog_image_metadata(image_url, image_source, image_match_id)
+                card.update({"Image URL": image_url, "Image Source": image_source, "Image Match ID": image_match_id})
         if pokemon_binder.save_collection(collection):
             config = pokemon_binder.load_config()
             gsheet_success, gsheet_msg = True, ""

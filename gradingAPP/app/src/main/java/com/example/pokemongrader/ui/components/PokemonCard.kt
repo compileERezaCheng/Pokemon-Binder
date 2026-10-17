@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.CardRank
+import com.example.pokemongrader.data.TcgDexClient
 import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.getRarityColor
 import com.example.pokemongrader.ui.main.capitalize
@@ -25,7 +26,9 @@ import com.example.pokemongrader.ui.main.capitalize
 @Composable
 fun PokemonCard(
     card: Card,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onImageClick: ((String) -> Unit)? = null,
+    onImageFailure: (() -> Unit)? = null
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "holographic")
     val sweepProgress by infiniteTransition.animateFloat(
@@ -52,8 +55,12 @@ fun PokemonCard(
         else -> Color.Gray
     }
     val speciesImage = if (card.dexNumber > 0) "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/" + card.dexNumber + ".png" else null
-    val catalogImage = card.imageUrl.takeIf { it.startsWith("https://assets.tcgdex.net/") }
-    val image = catalogImage ?: speciesImage
+    val catalogImage = TcgDexClient.cardImageUrl(card.imageUrl)
+    val image = catalogImage ?: if (card.catalogCardId.isBlank()) speciesImage else null
+
+    LaunchedEffect(card.copyId, card.catalogCardId, card.imageUrl, card.imageSource) {
+        if (card.catalogCardId.isNotBlank() && catalogImage == null && card.imageSource != "Scrydex") onImageFailure?.invoke()
+    }
 
     Box(
         modifier = modifier
@@ -105,12 +112,16 @@ fun PokemonCard(
                 if (image != null) {
                     AsyncImage(
                         url = image,
-                        fallbackUrl = if (catalogImage != null) speciesImage else null,
-                        contentDescription = card.name + " card",
-                        modifier = Modifier.fillMaxSize().padding(16.dp)
+                        contentDescription = card.name + if (catalogImage != null) " card" else " Pokémon",
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                        placeholder = "Imagem indisponível",
+                        onClick = if (catalogImage != null && onImageClick != null) {
+                            { onImageClick(catalogImage) }
+                        } else null,
+                        onError = if (card.catalogCardId.isNotBlank() && card.imageSource != "Scrydex") onImageFailure else null
                     )
                 } else {
-                    Text("No Artwork", color = Color.Gray)
+                    Text("Image unavailable", color = Color.Gray)
                 }
             }
 

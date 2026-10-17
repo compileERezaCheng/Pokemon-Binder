@@ -1,6 +1,7 @@
 package com.example.pokemongrader.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,6 +11,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.text.Normalizer
+import java.util.concurrent.ConcurrentHashMap
 
 data class CatalogCard(
     val id: String,
@@ -18,17 +21,25 @@ data class CatalogCard(
     val setName: String,
     val number: String,
     val rarity: String,
-    val imageUrl: String
+    val imageUrl: String,
+    val imageSource: String = "",
+    val imageMatchId: String = ""
 )
+
+data class ScrydexImageMatch(val cardId: String, val imageUrl: String)
 
 object TcgDexClient {
     private const val API = "https://api.tcgdex.net/v2/en/"
+    private const val SCRYDEX_API = "https://api.scrydex.com/pokemon/v1/en/cards"
+    private val CARD_IMAGE = Regex("""https://assets\.tcgdex\.net/[a-z-]+/[^/?#]+/[^/?#]+/([^/?#.]+)(?:/(?:low|high)\.(?:webp|png|jpg))?""")
     @Volatile private var cachedSets: Map<String, String> = emptyMap()
+    private data class CachedMatch(val value: ScrydexImageMatch?)
+    private val alternateImageCache = ConcurrentHashMap<String, CachedMatch>()
 
     internal fun imageUrlFromCards(json: String): String? {
         val cards = JSONArray(json)
         if (cards.length() != 1) return null
-        return cards.optJSONObject(0)?.optString("image")?.let(::catalogImage)
+        return cards.optJSONObject(0)?.optString("image")?.let(::cardImageUrl)
     }
 
     internal fun parseBriefCards(json: String, setNames: Map<String, String> = emptyMap()): List<CatalogCard> {
@@ -49,7 +60,8 @@ object TcgDexClient {
                         setName = setNames[setId] ?: setId,
                         number = number,
                         rarity = "",
-                        imageUrl = catalogImage(item.optString("image")).orEmpty()
+                        imageUrl = cardImageUrl(item.optString("image")).orEmpty(),
+                        imageSource = if (cardImageUrl(item.optString("image")).isNullOrBlank()) "" else "TCGdex"
                     )
                 )
             }
@@ -72,7 +84,8 @@ object TcgDexClient {
             setName = setName,
             number = number,
             rarity = card.optString("rarity"),
-            imageUrl = catalogImage(card.optString("image")).orEmpty()
+            imageUrl = cardImageUrl(card.optString("image")).orEmpty(),
+            imageSource = if (cardImageUrl(card.optString("image")).isNullOrBlank()) "" else "TCGdex"
         )
     }
 
@@ -90,6 +103,14 @@ object TcgDexClient {
         }.singleOrNull()
     }
 
+    internal fun sortBySetName(cards: List<CatalogCard>): List<CatalogCard> =
+        cards.sortedBy { normalize(it.setName) }
+
+    internal fun filterBySetName(cards: List<CatalogCard>, query: String): List<CatalogCard> {
+        val term = normalize(query)
+        return if (term.isBlank()) cards else cards.filter { normalize(it.setName).contains(term) }
+    }
+
     suspend fun searchCards(name: String, setName: String = "", cardNumber: String = ""): List<CatalogCard> =
         withContext(Dispatchers.IO) {
             if (name.isBlank()) return@withContext emptyList()
@@ -105,8 +126,8 @@ object TcgDexClient {
             }
             val setNames = runCatching { fetchSetNames() }.getOrDefault(emptyMap())
             val candidates = parseBriefCards(result, setNames)
-            val exact = candidates.filter { it.name.equals(name.trim(), ignoreCase = true) }
-            exact.ifEmpty { candidates }
+            val exact = candidates.filter { isPokemonCardNameMatch(it.name, name) }
+            sortBySetName(exact.ifEmpty { candidates })
         }
 
     suspend fun fetchCard(id: String): CatalogCard? = withContext(Dispatchers.IO) {
@@ -118,6 +139,80 @@ object TcgDexClient {
         val selected = uniqueCard(candidates, name, setName, cardNumber) ?: return null
         return runCatching { fetchCard(selected.id) }.getOrNull()?.imageUrl?.takeIf { it.isNotBlank() }
             ?: selected.imageUrl.takeIf { it.isNotBlank() }
+    }
+
+    internal fun isPokemonCardNameMatch(cardName: String, pokemonName: String): Boolean {
+        val target = normalize(cardName = pokemonName).split(" ").filter(String::isNotBlank)
+        val tokens = normalize(cardName).split(" ").filter(String::isNotBlank).toMutableList()
+        if (target.isEmpty() || tokens.isEmpty()) return false
+        val mega = tokens.first() in setOf("m", "mega")
+        if (mega) tokens.removeAt(0)
+        if (tokens.lastOrNull() in setOf("ex", "gx", "v", "vmax", "vstar", "break")) tokens.removeAt(tokens.lastIndex)
+        if (mega && tokens.lastOrNull() in setOf("x", "y")) tokens.removeAt(tokens.lastIndex)
+        return tokens == target
+    }
+
+    internal fun matchScrydexImage(tcgdexJson: String, scrydexJson: String): ScrydexImageMatch? {
+        return try {
+            val tcgdex = JSONObject(tcgdexJson)
+            val setName = normalize(tcgdex.optJSONObject("set")?.optString("name").orEmpty())
+            val number = numberKey(tcgdex.optString("localId"))
+            val identity = cardIdentity(tcgdex, scrydex = false)
+            val data = JSONObject(scrydexJson)
+            val cards = data.optJSONArray("data") ?: return null
+            if (setName.isBlank() || number.isBlank() || identity.first.isBlank()) return null
+            if (data.has("totalCount") && data.optInt("totalCount", Int.MAX_VALUE) > cards.length()) return null
+
+            val matches = mutableListOf<JSONObject>()
+            for (index in 0 until cards.length()) {
+                val candidate = cards.optJSONObject(index) ?: continue
+                val expansion = candidate.optJSONObject("expansion") ?: JSONObject()
+                val language = candidate.optString("language_code").ifBlank { expansion.optString("language_code") }
+                val numbers = listOf(candidate.optString("number"), candidate.optString("printed_number"))
+                    .filter(String::isNotBlank).map(::numberKey)
+                if (
+                    normalize(expansion.optString("name")) == setName &&
+                    normalize(language) == "en" && numbers.isNotEmpty() && numbers.distinct().size == 1 &&
+                    numbers.first() == number && cardIdentity(candidate, scrydex = true) == identity
+                ) matches += candidate
+            }
+            val candidate = matches.singleOrNull() ?: return null
+            val cardId = candidate.optString("id")
+            val images = candidate.optJSONArray("images") ?: return null
+            val front = (0 until images.length()).mapNotNull { images.optJSONObject(it) }
+                .firstOrNull { it.optString("type") == "front" } ?: return null
+            val image = front.optString("large")
+            val parsed = URL(image)
+            if (cardId.isBlank() || parsed.protocol != "https" || parsed.host != "images.scrydex.com" || parsed.path != "/pokemon/$cardId/large") return null
+            ScrydexImageMatch(cardId, image)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun resolveAlternateImage(card: CatalogCard): ScrydexImageMatch? = withContext(Dispatchers.IO) {
+        alternateImageCache[card.id]?.let { return@withContext it.value }
+        try {
+            val tcgdex = request("cards/" + encode(card.id))
+            val details = JSONObject(tcgdex)
+            val setName = details.optJSONObject("set")?.optString("name").orEmpty()
+            val number = numberKey(details.optString("localId"))
+            if (setName.isBlank() || number.isBlank()) {
+                alternateImageCache[card.id] = CachedMatch(null)
+                return@withContext null
+            }
+            val escapedSet = setName.replace("\\", "\\\\").replace("\"", "\\\"")
+            val query = "!expansion.name:\"$escapedSet\" !number:\"$number\""
+            val fields = "id,name,number,printed_number,language_code,subtypes,expansion,images"
+            val response = requestAbsolute("$SCRYDEX_API?q=${encode(query)}&page_size=100&select=${encode(fields)}")
+            val match = matchScrydexImage(tcgdex, response)
+            alternateImageCache[card.id] = CachedMatch(match)
+            match
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun fetchSetNames(): Map<String, String> {
@@ -135,8 +230,10 @@ object TcgDexClient {
         return names
     }
 
-    private fun request(path: String): String {
-        val connection = URL(API + path).openConnection() as HttpURLConnection
+    private fun request(path: String): String = requestAbsolute(API + path)
+
+    private fun requestAbsolute(url: String): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 5000
         connection.readTimeout = 5000
         return try {
@@ -147,11 +244,39 @@ object TcgDexClient {
         }
     }
 
-    private fun catalogImage(value: String): String? {
-        if (!value.startsWith("https://assets.tcgdex.net/")) return null
+    internal fun cardImageUrl(value: String): String? {
         val base = value.trimEnd('/')
+        if (Regex("""https://images\.scrydex\.com/pokemon/[^/?#]+/(?:small|medium|large)""").matches(base)) return base
+        val match = CARD_IMAGE.matchEntire(base) ?: return null
+        if (match.groupValues[1].equals("logo", true) || match.groupValues[1].equals("symbol", true)) return null
         return if (base.endsWith(".webp") || base.endsWith(".png") || base.endsWith(".jpg")) base else "$base/low.webp"
     }
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
+
+    private fun normalize(cardName: String): String = Normalizer.normalize(cardName, Normalizer.Form.NFKD)
+        .replace(Regex("\\p{M}+"), "").lowercase().replace(Regex("[^a-z0-9]+"), " ").trim().replace(Regex("\\s+"), " ")
+
+    private fun numberKey(value: String): String = value.substringBefore('/').trim().uppercase().let {
+        it.toIntOrNull()?.toString() ?: it
+    }
+
+    private fun cardIdentity(card: JSONObject, scrydex: Boolean): Pair<String, Set<String>> {
+        val tokens = normalize(card.optString("name")).split(" ").filter(String::isNotBlank).toMutableList()
+        val variants = mutableSetOf<String>()
+        if (tokens.firstOrNull() in setOf("m", "mega")) {
+            variants += "mega"
+            tokens.removeAt(0)
+        }
+        val suffixes = setOf("ex", "gx", "v", "vmax", "vstar", "break")
+        if (tokens.lastOrNull() in suffixes) variants += tokens.removeAt(tokens.lastIndex)
+        if (normalize(card.optString("stage")).contains("mega") || normalize(card.optString("subtype")).contains("mega")) variants += "mega"
+        normalize(card.optString("suffix")).takeIf { it in suffixes }?.let(variants::add)
+        if (scrydex) {
+            val subtypes = card.optJSONArray("subtypes") ?: JSONArray()
+            for (index in 0 until subtypes.length()) normalize(subtypes.optString(index)).takeIf { it in suffixes || it == "mega" }?.let(variants::add)
+        }
+        if ("mega" in variants && tokens.lastOrNull() in setOf("x", "y")) tokens.removeAt(tokens.lastIndex)
+        return tokens.joinToString(" ") to variants
+    }
 }

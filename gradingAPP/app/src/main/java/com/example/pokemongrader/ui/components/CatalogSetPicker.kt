@@ -6,8 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +44,7 @@ fun CatalogSetPicker(
     numberHint: String = "",
     onSelected: (CatalogCard?) -> Unit
 ) {
+    val queryKey = listOf(name.trim(), setHint.trim(), numberHint.trim()).joinToString("|")
     var candidates by remember { mutableStateOf<List<CatalogCard>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -52,8 +52,9 @@ fun CatalogSetPicker(
     var retry by remember { mutableIntStateOf(0) }
     var requestId by remember { mutableIntStateOf(0) }
     var userSelected by remember { mutableStateOf(false) }
+    var setSearch by remember(queryKey) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    val queryKey = listOf(name.trim(), setHint.trim(), numberHint.trim()).joinToString("|")
+    val visibleCandidates = TcgDexClient.filterBySetName(candidates, setSearch)
 
     LaunchedEffect(queryKey, retry) {
         val request = ++requestId
@@ -70,7 +71,7 @@ fun CatalogSetPicker(
             if (unique != null && selected?.id != unique.id && !userSelected) {
                 onSelected(unique)
                 val details = runCatching { TcgDexClient.fetchCard(unique.id) }.getOrNull()
-                if (request == requestId && !userSelected && details != null) onSelected(details)
+                if (request == requestId && !userSelected && details != null) onSelected(details.withCandidateImage(unique))
             }
         } catch (e: CancellationException) {
             throw e
@@ -88,8 +89,13 @@ fun CatalogSetPicker(
         expanded = false
         if (card != null) scope.launch {
             val details = runCatching { TcgDexClient.fetchCard(card.id) }.getOrNull()
-            if (request == requestId && details != null) onSelected(details)
+            if (request == requestId && details != null) onSelected(details.withCandidateImage(card))
         }
+    }
+
+    fun imageResolved(resolved: CatalogCard) {
+        candidates = candidates.map { if (it.id == resolved.id) resolved else it }
+        if (selected?.id == resolved.id) onSelected(resolved)
     }
 
     Column {
@@ -114,32 +120,30 @@ fun CatalogSetPicker(
             )
             DropdownMenu(
                 expanded = expanded,
-                onDismissRequest = { expanded = false }
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.exposedDropdownSize()
             ) {
+                OutlinedTextField(
+                    value = setSearch,
+                    onValueChange = { setSearch = it },
+                    label = { Text("Search sets") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 DropdownMenuItem(
                     text = { Text("Save without set") },
                     onClick = { choose(null) }
                 )
-                candidates.forEach { candidate ->
+                if (visibleCandidates.isEmpty()) {
                     DropdownMenuItem(
-                        text = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                if (candidate.imageUrl.isNotBlank()) {
-                                    AsyncImage(
-                                        url = candidate.imageUrl,
-                                        contentDescription = candidate.name + " card",
-                                        modifier = Modifier.size(width = 34.dp, height = 48.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(candidate.setName, style = MaterialTheme.typography.bodyMedium)
-                                    Text(candidate.name + " · #" + candidate.number, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        },
+                        text = { Text("No matching sets") },
+                        onClick = {},
+                        enabled = false
+                    )
+                }
+                visibleCandidates.forEach { candidate ->
+                    DropdownMenuItem(
+                    text = { CatalogSetOption(candidate) { resolved -> imageResolved(resolved) } },
                         onClick = { choose(candidate) }
                     )
                 }
@@ -158,3 +162,38 @@ fun CatalogSetPicker(
         }
     }
 }
+
+@Composable
+internal fun CatalogSetOption(candidate: CatalogCard, onImageResolved: (CatalogCard) -> Unit = {}) {
+    var imageCard by remember(candidate.id, candidate.imageUrl) { mutableStateOf(candidate) }
+    val scope = rememberCoroutineScope()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        AsyncImage(
+            url = imageCard.imageUrl,
+            contentDescription = imageCard.setName + " · #" + imageCard.number,
+            modifier = Modifier.width(84.dp).height(116.dp),
+            placeholder = "Image unavailable",
+            onError = {
+                if (imageCard.imageSource != "Scrydex") scope.launch {
+                    TcgDexClient.resolveAlternateImage(imageCard)?.let { match ->
+                        imageCard = imageCard.copy(imageUrl = match.imageUrl, imageSource = "Scrydex", imageMatchId = match.cardId)
+                        onImageResolved(imageCard)
+                    }
+                }
+            }
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(imageCard.setName, style = MaterialTheme.typography.bodyMedium)
+            Text("#" + imageCard.number, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun CatalogCard.withCandidateImage(candidate: CatalogCard): CatalogCard =
+    if (candidate.imageSource == "Scrydex") copy(
+        imageUrl = candidate.imageUrl, imageSource = candidate.imageSource, imageMatchId = candidate.imageMatchId
+    ) else this

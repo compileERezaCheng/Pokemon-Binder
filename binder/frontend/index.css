@@ -1105,6 +1105,19 @@ select option {
     overflow: hidden;
 }
 
+.image-unavailable {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    padding: 5px;
+    color: #cbd5e1;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
 .table-count-badge {
     display: inline-flex;
     align-items: center;
@@ -1188,47 +1201,94 @@ select option {
 
 .catalog-options {
     display: grid;
-    gap: 8px;
-    max-height: 360px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    max-height: min(52vh, 470px);
     overflow-y: auto;
-    margin-top: 8px;
+    margin-top: 12px;
+    padding: 2px 4px 6px 2px;
+}
+.catalog-search {
+    width: min(100%, 360px);
+    margin-top: 10px;
+}
+.catalog-search-empty {
+    margin: 6px 0;
+    color: var(--text-muted);
+    font-size: 12px;
 }
 .catalog-option {
     display: flex;
-    align-items: center;
-    gap: 14px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 9px;
     width: 100%;
     padding: 10px;
     color: var(--text-primary);
     text-align: left;
     background: var(--bg-input);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
     cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
 }
-.catalog-option:hover, .catalog-option[aria-selected="true"] {
-    border-color: rgba(239, 68, 68, 0.7);
+.catalog-option:hover {
+    border-color: rgba(239, 68, 68, 0.65);
+    background: rgba(239, 68, 68, 0.06);
+}
+.catalog-option[aria-selected="true"] {
+    border-color: var(--color-primary);
+    background: rgba(239, 68, 68, 0.12);
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
 }
 .catalog-option:focus-visible {
     outline: 2px solid rgba(239, 68, 68, 0.8);
     outline-offset: 2px;
 }
-.catalog-option img {
-    flex: 0 0 80px;
-    width: 80px;
-    height: 112px;
+.catalog-option[hidden] {
+    display: none !important;
+}
+.catalog-option-art {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: 8 / 11;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.035);
+    border-radius: 8px;
+}
+.catalog-option-art img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+    border-radius: inherit;
 }
 .catalog-option-copy {
     display: grid;
     min-width: 0;
-    gap: 6px;
+    gap: 4px;
+    padding: 1px 2px 2px;
 }
 .catalog-option-copy strong {
     font-size: 14px;
     line-height: 1.3;
+}
+.catalog-option-copy .muted-text {
+    color: #b8bfd1;
+    font-size: 12px;
+}
+.artwork-placeholder {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    padding: 8px;
+    color: #b8bfd1;
+    font-size: 12px;
+    line-height: 1.35;
+    text-align: center;
 }
 .grade-summary, .grade-criteria {
     display: flex;
@@ -1308,7 +1368,7 @@ select option {
     color: var(--text-secondary);
 }
 
-.form-group input, .form-group select {
+.form-group input, .form-group select, .catalog-search {
     background-color: var(--bg-input);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -1321,7 +1381,7 @@ select option {
     padding-right: 38px;
 }
 
-.form-group input:focus, .form-group select:focus {
+.form-group input:focus, .form-group select:focus, .catalog-search:focus {
     outline: none;
     border-color: rgba(239, 68, 68, 0.65);
     box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
@@ -1752,6 +1812,7 @@ input[type="file"]::file-selector-button:hover {
     justify-content: center;
     z-index: 50;
     padding: 20px;
+    overflow-y: auto;
     animation: fadeInModal 0.2s ease-out;
 }
 
@@ -1765,10 +1826,12 @@ input[type="file"]::file-selector-button:hover {
     border: 1px solid var(--border-color);
     border-radius: 24px;
     width: 100%;
-    max-width: 680px;
+    max-width: 1040px;
+    max-height: calc(100vh - 40px);
     position: relative;
     box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     animation: popUpModal 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.25);
 }
 
@@ -1797,52 +1860,119 @@ input[type="file"]::file-selector-button:hover {
 }
 
 .modal-body-layout {
-    display: flex;
-    padding: 30px;
-    gap: 30px;
+    display: grid;
+    grid-template-columns: minmax(220px, 0.82fr) minmax(0, 1.18fr);
+    align-items: start;
+    padding: 38px 34px 30px;
+    gap: 32px;
 }
 
 .modal-card-visual {
-    width: 220px;
+    width: 100%;
     flex-shrink: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
 }
 
-.modal-card-visual .pokemon-card-container {
-    height: 310px;
+.modal-card-artwork {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: min(100%, 360px);
+    aspect-ratio: 8 / 11;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: linear-gradient(145deg, rgba(255,255,255,0.045), rgba(0,0,0,0.22));
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    box-shadow: 0 20px 48px rgba(0,0,0,0.36);
+    cursor: zoom-in;
 }
 
+.modal-card-artwork:disabled {
+    cursor: default;
+}
+
+.modal-card-artwork:focus-visible,
+.modal-image-viewer-close:focus-visible,
+.modal-card-details button:focus-visible {
+    outline: 3px solid #fca5a5;
+    outline-offset: 3px;
+}
+
+.modal-card-artwork img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.modal-card-artwork .artwork-placeholder {
+    position: absolute;
+    inset: 0;
+    font-size: 14px;
+}
+
+.card-rank-overlay {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 74px;
+    padding-bottom: 3px;
+    color: #fff;
+    background: linear-gradient(145deg, #64748b, #334155);
+    clip-path: polygon(50% 0, 86% 12%, 100% 45%, 77% 86%, 50% 100%, 23% 86%, 0 45%, 14% 12%);
+    filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+    font-size: 15px;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.card-rank-overlay strong {
+    padding-top: 1px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.75);
+}
+
+.card-rank-overlay.rank-bronze { background: linear-gradient(145deg, #d18c5b, #75452d); }
+.card-rank-overlay.rank-silver { background: linear-gradient(145deg, #e2e8f0, #64748b); color: #172033; }
+.card-rank-overlay.rank-gold { background: linear-gradient(145deg, #fde68a, #b77908); color: #302000; }
+.card-rank-overlay.rank-platinum { background: linear-gradient(145deg, #bae6fd, #1682a8); }
+.card-rank-overlay.rank-diamond { background: linear-gradient(145deg, #ddd6fe, #6d43bd); }
+
 .modal-card-details {
-    flex-grow: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
 }
 
 .modal-card-details h2 {
-    font-size: 24px;
+    font-size: clamp(25px, 3vw, 32px);
     text-transform: capitalize;
-    margin-top: 10px;
+    line-height: 1.15;
+    margin: 0 42px 18px 0;
 }
 
 .date-label {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 4px;
 }
 
 .detail-group {
-    margin-top: 20px;
+    margin-top: 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
 }
 
 .detail-group label, #modal-stacked-section label {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--text-muted);
+    color: #b8bfd1;
     font-weight: 700;
 }
 
@@ -1850,11 +1980,23 @@ input[type="file"]::file-selector-button:hover {
     background-color: var(--bg-input);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 12px 14px;
-    font-size: 13.5px;
+    padding: 9px 12px;
+    font-size: 13px;
     line-height: 1.5;
-    min-height: 70px;
-    color: var(--text-secondary);
+    min-height: 40px;
+    color: #d7dbea;
+}
+
+.modal-notes-group textarea {
+    width: 100%;
+    min-height: 42px;
+    resize: vertical;
+    font-family: inherit;
+}
+
+.modal-notes-group textarea::placeholder {
+    color: #b8bfd1;
+    opacity: 1;
 }
 
 #modal-stacked-section {
@@ -1915,10 +2057,273 @@ input[type="file"]::file-selector-button:hover {
 }
 
 .modal-actions {
-    margin-top: auto;
-    padding-top: 24px;
+    margin-top: 14px;
+    padding-top: 8px;
     display: flex;
     justify-content: flex-end;
+}
+
+.modal-current-printing {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 12px;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+}
+
+.modal-current-printing-art {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: 0 0 64px;
+    width: 64px;
+    aspect-ratio: 8 / 11;
+    overflow: hidden;
+    background: rgba(255,255,255,0.04);
+    border-radius: 7px;
+}
+
+.modal-current-printing-art img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.modal-current-printing-art .artwork-placeholder {
+    font-size: 9px;
+    padding: 4px;
+}
+
+.modal-current-printing-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    min-width: 0;
+}
+
+.modal-current-printing-copy strong {
+    font-size: 15px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.modal-eyebrow {
+    color: #b8bfd1;
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.modal-current-printing-copy .btn-secondary {
+    min-height: 36px;
+    margin-top: 4px;
+    padding: 7px 12px;
+    font-size: 13px;
+}
+
+.modal-copy-facts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 9px;
+    margin-top: 15px;
+}
+
+.modal-copy-fact {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+    min-width: 0;
+    padding: 11px;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.075);
+    border-radius: 10px;
+}
+
+.modal-copy-fact > span {
+    color: #b8bfd1;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.modal-copy-fact > strong {
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.modal-grade-fact .grade-summary {
+    gap: 5px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.modal-pokemon-type.rarity-holo,
+.modal-pokemon-type.rarity-ultra,
+.modal-pokemon-type.rarity-illustration,
+.modal-pokemon-type.rarity-special,
+.modal-pokemon-type.rarity-secret,
+.modal-pokemon-type.rarity-hyper,
+.modal-pokemon-type.rarity-megaattack,
+.modal-pokemon-type.rarity-megahyper {
+    box-shadow: 0 0 14px currentColor, inset 0 0 7px rgba(255,255,255,0.14);
+    animation: modal-rarity-glow 2.8s ease-in-out infinite alternate;
+}
+
+@keyframes modal-rarity-glow {
+    from { filter: saturate(1); }
+    to { filter: saturate(1.35) brightness(1.12); }
+}
+
+.modal-edit-toggle { margin-top: 12px; align-self: flex-start; }
+.modal-edit-form {
+    display: grid;
+    gap: 9px;
+    margin-top: 10px;
+    padding: 13px;
+    border: 1px solid rgba(255,255,255,0.11);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.035);
+    color: #e2e8f0;
+    font-size: 12px;
+}
+.modal-edit-form > label,
+.modal-edit-grid label { display: grid; gap: 5px; color: #d4d8e2; font-weight: 650; }
+.modal-edit-form input,
+.modal-edit-form select {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: 7px 9px;
+    color: #f8fafc;
+    background: #111827;
+    border: 1px solid #475569;
+    border-radius: 7px;
+    font: inherit;
+}
+.modal-edit-form input:focus-visible,
+.modal-edit-form select:focus-visible { outline: 3px solid #fca5a5; outline-offset: 2px; }
+.modal-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.modal-edit-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 3px; }
+.modal-edit-actions button { min-height: 38px; }
+.modal-edit-form .modal-secondary-text { min-height: 16px; }
+
+.modal-copy-location {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin: 10px 0 0;
+    color: #b8bfd1;
+    font-size: 12px;
+}
+
+.modal-set-status {
+    min-height: 0;
+    color: #d0d5e3;
+    font-size: 12px;
+}
+
+.modal-set-picker {
+    min-width: 0;
+    padding-top: 3px;
+}
+
+.modal-picker-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.modal-pending-set {
+    color: #ffd7a3;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.modal-picker-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.modal-picker-actions button {
+    min-height: 38px;
+}
+
+.modal-picker-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.btn-remove-quiet {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+    color: #b8bfd1;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 9px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.btn-remove-quiet:hover {
+    color: #fecaca;
+    border-color: rgba(248,113,113,0.5);
+    background: rgba(248,113,113,0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-pokemon-type.rarity-holo,
+    .modal-pokemon-type.rarity-ultra,
+    .modal-pokemon-type.rarity-illustration,
+    .modal-pokemon-type.rarity-special,
+    .modal-pokemon-type.rarity-secret,
+    .modal-pokemon-type.rarity-hyper,
+    .modal-pokemon-type.rarity-megaattack,
+    .modal-pokemon-type.rarity-megahyper { animation: none; }
+}
+
+.modal-image-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    padding: 40px;
+    background: rgba(3,4,10,0.94);
+}
+
+.modal-image-viewer img {
+    display: block;
+    max-width: min(92vw, 900px);
+    max-height: 90vh;
+    object-fit: contain;
+}
+
+.modal-image-viewer-close {
+    position: absolute;
+    top: 18px;
+    right: 22px;
+    width: 44px;
+    height: 44px;
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 50%;
+    font-size: 30px;
+    cursor: pointer;
 }
 
 /* ==================== RESPONSIVE DESIGN BREAKPOINTS ==================== */
@@ -2028,12 +2433,87 @@ input[type="file"]::file-selector-button:hover {
     }
     
     .modal-body-layout {
-        flex-direction: column;
-        align-items: center;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        padding: 28px 24px 22px;
+        gap: 20px;
     }
     
     .modal-card-visual {
         width: 100%;
+        max-width: 300px;
+        margin: 0 auto;
+    }
+
+    .modal-card-artwork {
+        width: min(100%, 280px);
+    }
+
+    .modal-copy-facts {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .modal-grade-fact {
+        grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 480px) {
+    .modal-overlay {
+        align-items: flex-start;
+        padding: 8px;
+    }
+
+    .modal-card-content {
+        max-height: calc(100dvh - 16px);
+        border-radius: 18px;
+    }
+
+    .modal-body-layout {
+        padding: 25px 14px 18px;
+        gap: 16px;
+    }
+
+    .modal-card-details h2 {
+        margin-right: 38px;
+        font-size: 25px;
+    }
+
+    .modal-copy-facts {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .modal-grade-fact {
+        grid-column: auto;
+    }
+
+    .modal-current-printing {
+        gap: 10px;
+        padding: 10px;
+    }
+
+    .modal-edit-grid { grid-template-columns: minmax(0, 1fr); }
+
+    .modal-current-printing-art {
+        flex-basis: 54px;
+        width: 54px;
+    }
+
+    .modal-picker-actions {
+        width: 100%;
+    }
+
+    .modal-picker-actions button {
+        flex: 1 1 auto;
+    }
+
+    .catalog-options {
+        grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+        max-height: 48vh;
+    }
+
+    .modal-image-viewer {
+        padding: 20px;
     }
 }
 

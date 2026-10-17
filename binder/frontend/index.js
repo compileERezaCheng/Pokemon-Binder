@@ -39,9 +39,16 @@ let previewRarityClass = "Normal";
 let catalogSearchRevision = 0;
 let catalogSelectionRevision = 0;
 let catalogSetNames = null;
+let catalogSetDetails = null;
+const catalogImageFallbackCache = new Map();
 let modalSelectedCatalogCard = null;
+let modalSavedCatalogCard = null;
 let modalCatalogRevision = 0;
 let modalSelectionRevision = 0;
+let modalArtworkRevision = 0;
+let modalArtworkUrl = "";
+let modalArtworkIsCard = false;
+let modalNotesRevision = 0;
 const TCGDEX_API = "https://api.tcgdex.net/v2/en";
 
 // Autocomplete navigation state
@@ -407,6 +414,13 @@ function renderBinderGrid() {
                     img.alt = topCard.Name;
                     img.loading = "lazy";
                     frame.appendChild(img);
+                    setCardImageFallback(img, topCard);
+                } else if (topCard["Catalog Card ID"]) {
+                    const placeholder = document.createElement("span");
+                    placeholder.className = "image-unavailable";
+                    placeholder.textContent = topCard["Image Source"] === "Scrydex" ? "Imagem indisponível" : "A carregar imagem…";
+                    frame.appendChild(placeholder);
+                    resolveCardArtwork(frame, topCard);
                 } else {
                     // Custom card placeholder
                     const placeholder = document.createElement("div");
@@ -648,11 +662,56 @@ function quickAddCard(page, slot) {
 
 // ==================== COLLECTION TABLE VIEW ====================
 function getCardImageSource(card) {
-    const imageUrl = card["Image URL"] || "";
-    if (/^https:\/\/assets\.tcgdex\.net\//i.test(imageUrl)) return imageUrl;
+    const imageUrl = catalogImageUrl(card["Image URL"], "high");
+    if (imageUrl) return imageUrl;
+    if (card["Catalog Card ID"]) return "";
     return card["Dex Number"] > 0
         ? `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${card["Dex Number"]}.png`
         : "";
+}
+
+async function persistCardImageMatch(card, printing, match) {
+    if (!card || !card["Copy ID"] || !printing || !match) return;
+    try {
+        const response = await fetch("/api/update-card", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                copy_id: card["Copy ID"], catalog_card_id: printing.id, set_id: printing.setId,
+                set_name: printing.setName, card_number: printing.number, catalog_rarity: printing.rarity,
+                image_url: match.imageUrl, image_source: match.imageSource, image_match_id: match.imageMatchId
+            })
+        });
+        const data = await response.json();
+        if (!data.success) return;
+        Object.assign(card, {
+            "Catalog Card ID": printing.id, "Set ID": printing.setId, "Set Name": printing.setName,
+            "Card Number": printing.number, "Catalog Rarity": printing.rarity,
+            "Image URL": match.imageUrl, "Image Source": match.imageSource, "Image Match ID": match.imageMatchId
+        });
+        const savedCopy = collection.find(item => item["Copy ID"] === card["Copy ID"]);
+        if (savedCopy && savedCopy !== card) Object.assign(savedCopy, card);
+    } catch (_) {}
+}
+
+async function resolveCardArtwork(container, card) {
+    if (!card || !card["Catalog Card ID"] || card["Image Source"] === "Scrydex") return;
+    const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"] });
+    if (!match) {
+        const placeholder = container.querySelector(".image-unavailable") || container.firstChild;
+        if (placeholder) placeholder.textContent = "Imagem indisponível";
+        return;
+    }
+    Object.assign(card, { "Image URL": match.imageUrl, "Image Source": match.imageSource, "Image Match ID": match.imageMatchId });
+    const image = document.createElement("img");
+    image.src = match.imageUrl;
+    image.alt = card.Name || "Imagem da carta";
+    image.loading = "lazy";
+    setCardImageFallback(image, card);
+    container.replaceChildren(image);
+    await persistCardImageMatch(card, {
+        id: card["Catalog Card ID"], setId: card["Set ID"], setName: card["Set Name"],
+        number: card["Card Number"], rarity: card["Catalog Rarity"]
+    }, match);
 }
 
 function calculateRank(gradeValue, rarity) {
@@ -692,18 +751,119 @@ function getCardRarity(card) {
     return card["Catalog Rarity"] || card.Type || "Normal";
 }
 
-function catalogImageUrl(value) {
-    const url = String(value || "").trim();
-    if (!/^https:\/\/assets\.tcgdex\.net\//i.test(url)) return "";
-    return /\.(?:png|webp|jpe?g)(?:\?|$)/i.test(url) ? url : url.replace(/\/$/, "") + "/high.png";
+function isPokemonCardNameMatch(cardName, pokemonName) {
+    const normalize = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+    let candidate = normalize(cardName).split(" ");
+    const target = normalize(pokemonName);
+    if (!target || !candidate.length) return false;
+    const isMega = ["m", "mega"].includes(candidate[0]);
+    if (isMega) candidate.shift();
+    if (["ex", "gx", "v", "vmax", "vstar", "break"].includes(candidate.at(-1))) candidate.pop();
+    if (isMega && ["x", "y"].includes(candidate.at(-1))) candidate.pop();
+    const name = candidate.join(" ");
+    return name === target;
 }
 
-function setCardImageFallback(img, card) {
+async function resolveCatalogImageFallback(card) {
+    const id = String(card && card.id || "");
+    if (!id) return null;
+    if (catalogImageFallbackCache.has(id)) return await catalogImageFallbackCache.get(id);
+    const request = (async () => {
+        const response = await fetch("/api/catalog-image-fallback", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tcgdex_card_id: id })
+        });
+        if (!response.ok) throw new Error("Fallback image service unavailable");
+        const data = await response.json();
+        if (!data.success) throw new Error("Fallback image lookup failed");
+        return data.match && data.match.image_url && data.match.card_id ? {
+            imageUrl: data.match.image_url, imageSource: "Scrydex", imageMatchId: data.match.card_id
+        } : null;
+    })();
+    catalogImageFallbackCache.set(id, request);
+    try {
+        const match = await request;
+        catalogImageFallbackCache.set(id, match);
+        return match;
+    } catch (_) {
+        catalogImageFallbackCache.delete(id);
+        return null;
+    }
+}
+
+const catalogImageSetAliases = {
+    "swsh4.5sv": "swsh4.5", "swsh12.5gg": "swsh12.5",
+    "swsh9tg": "swsh9", "swsh9.5tg": "swsh9",
+    "swsh10tg": "swsh10", "swsh10.5tg": "swsh10",
+    "swsh11tg": "swsh11", "swsh11.5tg": "swsh11",
+    "swsh12tg": "swsh12", "swsh12.5tg": "swsh12.5"
+};
+const catalogSetSeriesOverrides = {
+    mep: "me", svp: "sv", "P-A": "sv",
+    "swsh4.5sv": "swsh", "swsh12.5gg": "swsh",
+    swsh9tg: "swsh", "swsh9.5tg": "swsh",
+    swsh10tg: "swsh", "swsh10.5tg": "swsh",
+    swsh11tg: "swsh", "swsh11.5tg": "swsh",
+    swsh12tg: "swsh", "swsh12.5tg": "swsh"
+};
+
+function catalogImageUrl(value, quality = "high") {
+    const url = String(value || "").trim();
+    if (/^https:\/\/images\.scrydex\.com\/pokemon\/[^/?#]+\/(?:small|medium|large)$/i.test(url)) return url;
+    const match = url.match(/^https:\/\/assets\.tcgdex\.net\/([a-z]{2}(?:-[a-z]{2})?)\/([^/]+)\/([^/]+)\/([^/]+)(?:\/(?:high|low)\.(?:png|webp|jpe?g))?$/i);
+    if (!match || /^(?:logo|symbol)(?:\.[a-z]+)?$/i.test(match[4])) return "";
+    const size = quality === "low" ? "low.webp" : "high.png";
+    return `https://assets.tcgdex.net/${match[1]}/${match[2]}/${match[3]}/${match[4]}/${size}`;
+}
+
+function getCatalogSetId(card) {
+    if (card.set && card.set.id) return String(card.set.id);
+    const id = String(card.id || "");
+    const localId = String(card.localId || "");
+    return localId && id.endsWith("-" + localId) ? id.slice(0, -localId.length - 1) : "";
+}
+
+function resolveCatalogImageUrl(card, setDetails = catalogSetDetails) {
+    const source = catalogImageUrl(card.image, "low");
+    if (source) return source;
+    const setId = getCatalogSetId(card);
+    const localId = String(card.localId || "").trim();
+    const seriesId = (card.set && card.set.serie && card.set.serie.id) ||
+        (setDetails && setDetails[setId] && setDetails[setId].seriesId) || catalogSetSeriesOverrides[setId];
+    if (!setId || !localId || !seriesId) return "";
+    const assetSetId = catalogImageSetAliases[setId] || setId;
+    return catalogImageUrl(`https://assets.tcgdex.net/en/${seriesId}/${assetSetId}/${localId}`, "low");
+}
+
+function setCardImageFallback(img, card, onResolved = () => {}) {
     const dex = Number(card["Dex Number"]);
     const fallback = dex > 0 ? "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/" + dex + ".png" : "";
-    img.onerror = () => {
-        if (fallback && img.src !== fallback) img.src = fallback;
-        else img.remove();
+    img.onerror = async () => {
+        if (card["Catalog Card ID"]) {
+            if (card["Image Source"] !== "Scrydex") {
+                const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"] });
+                if (match) {
+                    img.src = match.imageUrl;
+                    onResolved(match);
+                    await persistCardImageMatch(card, {
+                        id: card["Catalog Card ID"], setId: card["Set ID"], setName: card["Set Name"],
+                        number: card["Card Number"], rarity: card["Catalog Rarity"]
+                    }, match);
+                    return;
+                }
+            }
+            const placeholder = document.createElement("span");
+            placeholder.className = "image-unavailable";
+            placeholder.textContent = "Imagem indisponível";
+            img.replaceWith(placeholder);
+        } else if (fallback && img.src !== fallback) img.src = fallback;
+        else {
+            const placeholder = document.createElement("span");
+            placeholder.className = "image-unavailable";
+            placeholder.textContent = "Imagem indisponível";
+            img.replaceWith(placeholder);
+        }
     };
 }
 
@@ -713,40 +873,89 @@ async function loadCatalogSetNames() {
     if (!response.ok) throw new Error("TCGdex sets unavailable");
     const sets = await response.json();
     catalogSetNames = Object.fromEntries(sets.map(set => [set.id, set.name]));
+    catalogSetDetails = Object.fromEntries(sets.map(set => [set.id, { seriesId: set.serie && set.serie.id }]));
     return catalogSetNames;
 }
 
 function renderCatalogOptions(cards, listId, revision) {
     const list = document.getElementById(listId);
     list.replaceChildren();
+    document.getElementById(listId.replace("-options", "-search")).hidden = false;
+    document.getElementById(listId.replace("-options", "-search-empty")).classList.add("hidden");
     const isModal = listId === "modal-set-options";
     const selected = isModal ? modalSelectedCatalogCard : selectedCatalogCard;
+    cards.sort((a, b) => a.setName.localeCompare(b.setName, undefined, { sensitivity: "base" }));
     cards.forEach(card => {
         const option = document.createElement("button");
         option.type = "button";
         option.className = "catalog-option";
         option.setAttribute("role", "option");
         option.dataset.catalogCardId = card.id;
+        option.dataset.setName = card.setName;
         option.setAttribute("aria-selected", selected && selected.id === card.id ? "true" : "false");
-        if (card.imageUrl) {
-            const image = document.createElement("img");
-            image.src = card.imageUrl;
-            image.alt = "";
-            image.loading = "lazy";
-            option.appendChild(image);
-        }
+        const art = document.createElement("span");
+        art.className = "catalog-option-art";
+        const placeholder = document.createElement("span");
+        placeholder.className = "artwork-placeholder";
+        placeholder.textContent = "A carregar imagem…";
+        art.appendChild(placeholder);
+        const image = document.createElement("img");
+        image.alt = "";
+        image.loading = "eager";
+        image.classList.add("hidden");
+        image.addEventListener("load", () => {
+            image.classList.remove("hidden");
+            placeholder.classList.add("hidden");
+        });
+        image.addEventListener("error", async () => {
+            image.classList.add("hidden");
+            if (card.imageSource !== "Scrydex" && card.id && revision === (isModal ? modalCatalogRevision : catalogSearchRevision)) {
+                const fallback = await resolveCatalogImageFallback(card);
+                if (fallback) {
+                    Object.assign(card, fallback);
+                    image.src = fallback.imageUrl;
+                    return;
+                }
+            }
+            placeholder.textContent = "Imagem indisponível";
+            placeholder.classList.remove("hidden");
+        });
+        art.appendChild(image);
+        option.appendChild(art);
         const copy = document.createElement("span");
         copy.className = "catalog-option-copy";
         const name = document.createElement("strong");
-        name.textContent = card.setName + " - " + card.name;
+        name.textContent = card.setName;
         const number = document.createElement("span");
         number.className = "muted-text";
-        number.textContent = "#" + (card.number || "?") + (card.rarity ? " - " + card.rarity : "");
+        number.textContent = "#" + (card.number || "?");
         copy.append(name, number);
         option.appendChild(copy);
         option.addEventListener("click", () => chooseCatalogCard(card, listId, revision));
         list.appendChild(option);
+        if (card.imageUrl) image.src = card.imageUrl;
+        else resolveCatalogImageFallback(card).then(fallback => {
+            if (fallback && revision === (isModal ? modalCatalogRevision : catalogSearchRevision)) {
+                Object.assign(card, fallback);
+                image.src = fallback.imageUrl;
+            } else if (!fallback) {
+                placeholder.textContent = "Imagem indisponível";
+            }
+        });
     });
+}
+
+function filterCatalogOptions(listId, query) {
+    const normalize = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+    const term = normalize(query);
+    let matches = 0;
+    Array.from(document.getElementById(listId).children).forEach(option => {
+        option.hidden = Boolean(term && !normalize(option.dataset.setName).includes(term));
+        if (!option.hidden) matches++;
+    });
+    const empty = document.getElementById(listId.replace("-options", "-search-empty"));
+    if (term && !matches) empty.classList.remove("hidden");
+    else empty.classList.add("hidden");
 }
 
 async function searchCatalogCards(name, listId, revision) {
@@ -755,24 +964,28 @@ async function searchCatalogCards(name, listId, revision) {
     const status = document.getElementById(isModal ? "modal-set-status" : "add-set-status");
     const list = document.getElementById(listId);
     if (!current()) return;
-    status.textContent = "Searching TCGdex printings for " + name + "...";
+    const search = document.getElementById(listId.replace("-options", "-search"));
+    search.value = "";
+    search.hidden = true;
+    document.getElementById(listId.replace("-options", "-search-empty")).classList.add("hidden");
+    status.textContent = isModal ? "A carregar edições…" : "Searching TCGdex printings for " + name + "...";
     list.replaceChildren();
     try {
         const response = await fetch(TCGDEX_API + "/cards?name=" + encodeURIComponent(name));
         if (!response.ok) throw new Error("TCGdex search failed");
         const records = await response.json();
-        const matching = records.filter(card => String(card.name || "").toLowerCase() === name.toLowerCase());
+        const matching = records.filter(card => isPokemonCardNameMatch(card.name, name));
         let sets = {};
         try { sets = await loadCatalogSetNames(); } catch (_) {}
         if (!current()) return;
         const cards = matching.map(card => {
             const id = String(card.id || "");
             const splitAt = id.lastIndexOf("-");
-            const setId = splitAt > 0 ? id.slice(0, splitAt) : id;
+            const setId = getCatalogSetId(card) || (splitAt > 0 ? id.slice(0, splitAt) : id);
             return {
                 id, name: card.name, setId, setName: sets[setId] || setId,
-                number: card.localId || "", rarity: "",
-                imageUrl: catalogImageUrl(card.image)
+                number: card.localId || "", rarity: "", imageSource: "TCGdex", imageMatchId: "",
+                imageUrl: resolveCatalogImageUrl(card, catalogSetDetails)
             };
         });
         if (!cards.length) {
@@ -781,8 +994,20 @@ async function searchCatalogCards(name, listId, revision) {
         }
         status.textContent = "Choose the matching set and card number. Leaving this blank adds only the Pokémon.";
         renderCatalogOptions(cards, listId, revision);
+        if (isModal) {
+            status.textContent = "";
+            if (modalSavedCatalogCard) {
+                const savedMatch = cards.find(card => card.id === modalSavedCatalogCard.id);
+                if (savedMatch) {
+                    modalSavedCatalogCard = { ...modalSavedCatalogCard, imageUrl: savedMatch.imageUrl || modalSavedCatalogCard.imageUrl };
+                    modalSelectedCatalogCard = modalSavedCatalogCard;
+                    renderSavedModalPrinting();
+                    if (modalSavedCatalogCard.id) renderModalArtwork(modalSavedCatalogCard.imageUrl, true, modalSavedCatalogCard.imageSource, modalSavedCatalogCard.imageMatchId);
+                }
+            }
+        }
         const unique = chooseUniqueCatalogCard(cards, { name });
-        if (unique) chooseCatalogCard(unique, listId, revision);
+        if (unique && !isModal) chooseCatalogCard(unique, listId, revision);
     } catch (error) {
         if (!current()) return;
         status.replaceChildren(document.createTextNode("Could not load TCGdex printings. "));
@@ -815,12 +1040,15 @@ async function chooseCatalogCard(candidate, listId, revision) {
             setName: (details.set && details.set.name) || candidate.setName,
             number: details.localId || candidate.number,
             rarity: details.rarity || "",
-            imageUrl: catalogImageUrl(details.image) || candidate.imageUrl
+            imageUrl: candidate.imageSource === "Scrydex" ? candidate.imageUrl : catalogImageUrl(details.image, "high") || catalogImageUrl(candidate.imageUrl, "high"),
+            imageSource: candidate.imageSource === "Scrydex" ? "Scrydex" : (catalogImageUrl(details.image, "high") || catalogImageUrl(candidate.imageUrl, "high") ? "TCGdex" : ""),
+            imageMatchId: candidate.imageSource === "Scrydex" ? candidate.imageMatchId : ""
         };
         if (isModal) {
             modalSelectedCatalogCard = selected;
-            document.getElementById("modal-save-set").disabled = false;
-            status.textContent = "Selected " + selected.setName + " - #" + selected.number + ". Save to update this copy.";
+            updateModalPrintingUi();
+            const fallback = modalActiveCard && getCardImageSource({ ...modalActiveCard, "Image URL": "" });
+            renderModalArtwork(selected.imageUrl || fallback, Boolean(selected.id), selected.imageSource, selected.imageMatchId);
         } else {
             selectedCatalogCard = selected;
             document.getElementById("add-clear-set").disabled = false;
@@ -839,12 +1067,32 @@ async function chooseCatalogCard(candidate, listId, revision) {
             const placeholder = document.getElementById("preview-image-placeholder");
             if (selected.imageUrl) {
                 image.src = selected.imageUrl;
-                setCardImageFallback(image, { "Dex Number": selectedPokemon ? selectedPokemon.id : 0 });
+                setCardImageFallback(image, {
+                    "Dex Number": selectedPokemon ? selectedPokemon.id : 0, "Catalog Card ID": selected.id,
+                    "Set ID": selected.setId, "Set Name": selected.setName, "Card Number": selected.number,
+                    "Catalog Rarity": selected.rarity, "Image Source": selected.imageSource
+                }, match => Object.assign(selectedCatalogCard, match));
                 image.classList.remove("hidden");
                 placeholder.classList.add("hidden");
             } else {
                 image.classList.add("hidden");
                 placeholder.classList.remove("hidden");
+                if (selected.id) {
+                    placeholder.textContent = "A carregar imagem…";
+                    resolveCatalogImageFallback(selected).then(match => {
+                        if (match && selectedCatalogCard && selectedCatalogCard.id === selected.id) {
+                            Object.assign(selected, match);
+                            image.src = match.imageUrl;
+                            setCardImageFallback(image, {
+                                "Dex Number": selectedPokemon ? selectedPokemon.id : 0, "Catalog Card ID": selected.id,
+                                "Set ID": selected.setId, "Set Name": selected.setName, "Card Number": selected.number,
+                                "Catalog Rarity": selected.rarity, "Image Source": selected.imageSource
+                            }, resolved => Object.assign(selectedCatalogCard, resolved));
+                            image.classList.remove("hidden");
+                            placeholder.classList.add("hidden");
+                        } else placeholder.textContent = "Imagem indisponível";
+                    });
+                }
             }
             status.textContent = "Selected " + selected.setName + " - #" + selected.number + ".";
         }
@@ -877,12 +1125,188 @@ function clearAddCatalogCard() {
     }
 }
 
+function getSavedModalCatalogCard(card) {
+    const id = String(card["Catalog Card ID"] || "");
+    const setId = String(card["Set ID"] || "");
+    const setName = String(card["Set Name"] || "");
+    const number = String(card["Card Number"] || "");
+    if (!id && !setId && !setName && !number) return null;
+    return {
+        id, name: card.Name, setId, setName: setName || setId, number,
+        rarity: card["Catalog Rarity"] || "",
+        imageUrl: catalogImageUrl(card["Image URL"], "high"),
+        imageSource: card["Image Source"] || "",
+        imageMatchId: card["Image Match ID"] || ""
+    };
+}
+
+function isValidCatalogPrinting(card) {
+    return Boolean(card && card.id && card.setId && card.setName && card.number);
+}
+
+function modalPrintingNeedsSave() {
+    if (!isValidCatalogPrinting(modalSelectedCatalogCard)) return false;
+    const saved = modalSavedCatalogCard;
+    return !saved || modalSelectedCatalogCard.id !== saved.id ||
+        modalSelectedCatalogCard.imageSource !== saved.imageSource ||
+        modalSelectedCatalogCard.imageMatchId !== saved.imageMatchId ||
+        modalSelectedCatalogCard.imageUrl !== saved.imageUrl;
+}
+
+function renderSavedModalPrinting() {
+    const saved = modalSavedCatalogCard;
+    document.getElementById("modal-current-label").textContent = saved && saved.id ? "Edição guardada" : "Edição";
+    document.getElementById("modal-current-set").textContent = saved ? (saved.setName || saved.setId) : "Sem edição guardada";
+    document.getElementById("modal-current-number").textContent = saved && saved.number ? "#" + saved.number : "";
+    const image = document.getElementById("modal-current-set-image");
+    const placeholder = document.getElementById("modal-current-set-image-placeholder");
+    const imageUrl = saved && catalogImageUrl(saved.imageUrl, "low");
+    image.classList.add("hidden");
+    placeholder.textContent = imageUrl ? "A carregar imagem…" : "Imagem indisponível";
+    placeholder.classList.remove("hidden");
+    image.onload = () => {
+        if (!imageUrl || image.src !== imageUrl) return;
+        image.classList.remove("hidden");
+        placeholder.classList.add("hidden");
+    };
+    image.onerror = () => {
+        if (!imageUrl || image.src !== imageUrl) return;
+        image.classList.add("hidden");
+        if (saved && saved.id && saved.imageSource !== "Scrydex") {
+            resolveCatalogImageFallback(saved).then(match => {
+                if (match && modalSavedCatalogCard === saved) {
+                    Object.assign(saved, match);
+                    renderSavedModalPrinting();
+                    persistCardImageMatch(modalActiveCard, saved, match);
+                } else {
+                    placeholder.textContent = "Imagem indisponível";
+                    placeholder.classList.remove("hidden");
+                }
+            });
+        } else {
+            placeholder.textContent = "Imagem indisponível";
+            placeholder.classList.remove("hidden");
+        }
+    };
+    if (imageUrl) image.src = imageUrl;
+}
+
+function renderModalArtwork(url, isCardImage, imageSource = "TCGdex", imageMatchId = "") {
+    const image = document.getElementById("modal-card-artwork-image");
+    const placeholder = document.getElementById("modal-card-artwork-placeholder");
+    const button = document.getElementById("modal-card-artwork-button");
+    const revision = ++modalArtworkRevision;
+    const source = isCardImage ? catalogImageUrl(url, "high") : String(url || "");
+    const printing = modalSelectedCatalogCard || modalSavedCatalogCard;
+    modalArtworkUrl = "";
+    modalArtworkIsCard = false;
+    image.classList.add("hidden");
+    button.disabled = true;
+    placeholder.textContent = source || (isCardImage && printing && printing.id) ? "A carregar imagem…" : "Imagem indisponível";
+    placeholder.classList.remove("hidden");
+    image.alt = modalActiveCard ? "Imagem de " + modalActiveCard.Name : "Imagem da carta";
+    image.onload = () => {
+        if (revision !== modalArtworkRevision || (source && image.src !== source)) return;
+        image.classList.remove("hidden");
+        placeholder.classList.add("hidden");
+        modalArtworkUrl = source;
+        modalArtworkIsCard = Boolean(isCardImage);
+        button.disabled = !modalArtworkIsCard;
+        button.setAttribute("aria-label", modalArtworkIsCard ? "Ampliar imagem da carta" : "Imagem do Pokémon");
+    };
+    image.onerror = () => {
+        if (revision !== modalArtworkRevision || !source || image.src !== source) return;
+        if (isCardImage && printing && printing.id && imageSource !== "Scrydex") {
+            resolveCatalogImageFallback(printing).then(match => {
+                if (revision !== modalArtworkRevision) return;
+                if (match) {
+                    Object.assign(printing, match);
+                    const isSaved = printing === modalSavedCatalogCard && !modalPrintingNeedsSave();
+                    if (modalSelectedCatalogCard && modalSelectedCatalogCard.id === printing.id) Object.assign(modalSelectedCatalogCard, match);
+                    updateModalPrintingUi();
+                    renderSavedModalPrinting();
+                    renderModalArtwork(match.imageUrl, true, match.imageSource, match.imageMatchId);
+                    if (isSaved) persistCardImageMatch(modalActiveCard, printing, match);
+                    return;
+                }
+                image.classList.add("hidden");
+                placeholder.textContent = "Imagem indisponível";
+                placeholder.classList.remove("hidden");
+            });
+            return;
+        }
+        image.classList.add("hidden");
+        placeholder.textContent = "Imagem indisponível";
+        placeholder.classList.remove("hidden");
+    };
+    if (source) image.src = source;
+    else if (isCardImage && printing && printing.id) image.onerror();
+}
+
+function openModalImageViewer() {
+    if (!modalArtworkIsCard || !modalArtworkUrl) return;
+    const viewer = document.getElementById("modal-image-viewer");
+    const image = document.getElementById("modal-image-viewer-image");
+    image.src = modalArtworkUrl;
+    image.alt = modalActiveCard ? "Imagem ampliada da carta de " + modalActiveCard.Name : "Imagem ampliada da carta";
+    viewer.classList.remove("hidden");
+}
+
+function closeModalImageViewer(event) {
+    if (event) event.stopPropagation();
+    document.getElementById("modal-image-viewer").classList.add("hidden");
+    document.getElementById("modal-image-viewer-image").src = "";
+}
+
+function updateModalPrintingUi() {
+    const dirty = modalPrintingNeedsSave();
+    const save = document.getElementById("modal-save-set");
+    save.disabled = !dirty;
+    const pending = document.getElementById("modal-pending-set");
+    pending.textContent = dirty
+        ? (modalSavedCatalogCard && modalSelectedCatalogCard.id === modalSavedCatalogCard.id ? "Origem da imagem por guardar: " : "Nova edição por guardar: ") + modalSelectedCatalogCard.setName + " · #" + modalSelectedCatalogCard.number
+        : "";
+    if (dirty) pending.classList.remove("hidden");
+    else pending.classList.add("hidden");
+    document.getElementById("modal-set-status").textContent = "";
+}
+
+function openModalPrintingPicker() {
+    const picker = document.getElementById("modal-set-picker");
+    picker.classList.remove("hidden");
+    if (!document.getElementById("modal-set-options").children.length && !document.getElementById("modal-set-status").textContent) {
+        document.getElementById("modal-set-status").textContent = "A carregar edições…";
+    }
+    document.getElementById("modal-open-set-picker").setAttribute("aria-expanded", "true");
+}
+
+function cancelModalCatalogSelection() {
+    modalSelectionRevision++;
+    modalSelectedCatalogCard = modalSavedCatalogCard;
+    document.getElementById("modal-set-picker").classList.add("hidden");
+    document.getElementById("modal-open-set-picker").setAttribute("aria-expanded", "false");
+    document.getElementById("modal-set-status").textContent = "";
+    updateModalPrintingUi();
+    renderSavedModalPrinting();
+    const imageUrl = modalSavedCatalogCard && modalSavedCatalogCard.imageUrl;
+    renderModalArtwork(imageUrl || (modalActiveCard && getCardImageSource({ ...modalActiveCard, "Image URL": "" })), Boolean(modalSavedCatalogCard && modalSavedCatalogCard.id), modalSavedCatalogCard && modalSavedCatalogCard.imageSource, modalSavedCatalogCard && modalSavedCatalogCard.imageMatchId);
+    Array.from(document.getElementById("modal-set-options").children).forEach(option =>
+        option.setAttribute("aria-selected", modalSelectedCatalogCard && option.dataset.catalogCardId === modalSelectedCatalogCard.id ? "true" : "false"));
+}
+
 function loadModalCatalogOptions(card) {
-    modalSelectedCatalogCard = null;
     modalCatalogRevision++;
+    modalSavedCatalogCard = getSavedModalCatalogCard(card);
+    modalSelectedCatalogCard = modalSavedCatalogCard;
     document.getElementById("modal-save-set").disabled = true;
+    document.getElementById("modal-set-picker").classList.add("hidden");
+    document.getElementById("modal-open-set-picker").setAttribute("aria-expanded", "false");
     document.getElementById("modal-set-options").replaceChildren();
-    searchCatalogCards(card.Name, "modal-set-options", modalCatalogRevision);
+    document.getElementById("modal-set-status").textContent = "";
+    renderSavedModalPrinting();
+    const imageUrl = modalSavedCatalogCard && modalSavedCatalogCard.imageUrl;
+    renderModalArtwork(imageUrl || getCardImageSource({ ...card, "Image URL": "" }), Boolean(modalSavedCatalogCard && modalSavedCatalogCard.id), modalSavedCatalogCard && modalSavedCatalogCard.imageSource, modalSavedCatalogCard && modalSavedCatalogCard.imageMatchId);
+    return searchCatalogCards(card.Name, "modal-set-options", modalCatalogRevision);
 }
 
 function renderModalGrade(card) {
@@ -890,24 +1314,35 @@ function renderModalGrade(card) {
     const criteriaBox = document.getElementById("modal-grade-criteria");
     const details = document.getElementById("modal-grade-details");
     const detailsText = document.getElementById("modal-grade-details-text");
+    const overlay = document.getElementById("modal-card-rank");
+    const overlayGrade = document.getElementById("modal-card-rank-grade");
+    const overlayRank = document.getElementById("modal-card-rank-name");
     summary.replaceChildren();
     criteriaBox.replaceChildren();
     const grade = Number(card.Grade);
     const hasGrade = card.Grade != null && String(card.Grade).trim() !== "" && Number.isFinite(grade) && grade >= 1 && grade <= 10;
-    const score = document.createElement("span");
-    score.textContent = hasGrade ? "Grade " + grade + "/10" : "No grade recorded";
-    summary.appendChild(score);
+    if (!hasGrade) {
+        const score = document.createElement("span");
+        score.textContent = "Sem avaliação";
+        summary.appendChild(score);
+        overlay.classList.add("hidden");
+        details.open = false;
+        details.hidden = true;
+        criteriaBox.hidden = true;
+        detailsText.textContent = "";
+        return;
+    }
+    criteriaBox.hidden = false;
     const rank = calculateRank(hasGrade ? grade : null, card["Catalog Rarity"]);
     const rankBadge = document.createElement("span");
     rankBadge.className = "rank-badge rank-" + rank.toLowerCase().replace(/\s+/g, "-");
-    rankBadge.textContent = rank;
+    rankBadge.textContent = rank === "No Rank" ? "Sem rank" : rank;
     summary.appendChild(rankBadge);
-    if (card.Condition) {
-        const condition = document.createElement("span");
-        condition.className = "badge " + card.Condition;
-        condition.textContent = "Condition " + card.Condition;
-        summary.appendChild(condition);
-    }
+    overlay.className = "card-rank-overlay rank-" + rank.toLowerCase().replace(/\s+/g, "-");
+    overlay.classList.remove("hidden");
+    overlayGrade.textContent = Number.isInteger(grade) ? String(grade) : String(grade);
+    overlayRank.textContent = rank === "No Rank" ? "Sem rank" : rank;
+    overlay.setAttribute("aria-label", `${rank === "No Rank" ? "Sem rank" : rank}; nota ${grade}/10`);
     const rawDetails = String(card["Grade Details"] || "");
     let parsed = null;
     try { parsed = rawDetails ? JSON.parse(rawDetails) : null; } catch (_) {}
@@ -928,8 +1363,71 @@ function renderModalGrade(card) {
     details.hidden = !rawDetails;
 }
 
+function toggleModalEditDetails() {
+    if (!modalActiveCard) return;
+    const form = document.getElementById("modal-edit-form");
+    const button = document.getElementById("modal-edit-details");
+    const opening = form.classList.contains("hidden");
+    if (opening) {
+        const card = modalActiveCard;
+        document.getElementById("modal-edit-name").value = card.Name || "";
+        document.getElementById("modal-edit-dex").value = card["Dex Number"] || "";
+        document.getElementById("modal-edit-page").value = card.Page || 1;
+        document.getElementById("modal-edit-slot").value = card.Slot || 1;
+        document.getElementById("modal-edit-condition").value = card.Condition || "NM";
+        document.getElementById("modal-edit-type").value = card.Type || "Normal";
+        document.getElementById("modal-edit-rarity").value = card["Catalog Rarity"] || "";
+        document.getElementById("modal-edit-grade").value = card.Grade || "";
+        document.getElementById("modal-edit-date").value = String(card["Date Added"] || "").replace(" ", "T");
+        document.getElementById("modal-edit-status").textContent = "";
+        form.classList.remove("hidden");
+        document.getElementById("modal-edit-name").focus();
+    } else form.classList.add("hidden");
+    button.setAttribute("aria-expanded", opening ? "true" : "false");
+}
+
+function cancelModalEditDetails() {
+    document.getElementById("modal-edit-form").classList.add("hidden");
+    document.getElementById("modal-edit-details").setAttribute("aria-expanded", "false");
+    document.getElementById("modal-edit-status").textContent = "";
+}
+
+async function saveModalCopyDetails() {
+    if (!modalActiveCard) return;
+    const card = modalActiveCard;
+    const button = document.getElementById("modal-save-details");
+    const status = document.getElementById("modal-edit-status");
+    button.disabled = true;
+    status.textContent = "A guardar…";
+    try {
+        const response = await fetch("/api/update-card", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                copy_id: card["Copy ID"] || "", page: document.getElementById("modal-edit-page").value,
+                slot: document.getElementById("modal-edit-slot").value, name: document.getElementById("modal-edit-name").value,
+                dex_id: document.getElementById("modal-edit-dex").value || 0,
+                date_added: document.getElementById("modal-edit-date").value.replace("T", " "),
+                condition: document.getElementById("modal-edit-condition").value,
+                type: document.getElementById("modal-edit-type").value,
+                catalog_rarity: document.getElementById("modal-edit-rarity").value,
+                grade: document.getElementById("modal-edit-grade").value
+            })
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || "Não foi possível guardar as alterações.");
+        await loadCollection();
+        const updated = data.card || card;
+        openCardModal(updated.Page, updated.Slot, updated["Copy ID"] || updated["Date Added"]);
+        showToast("Detalhes atualizados.", "success");
+    } catch (error) {
+        status.textContent = error.message || "Não foi possível guardar as alterações.";
+    } finally {
+        button.disabled = false;
+    }
+}
+
 async function saveModalCatalogCard() {
-    if (!modalActiveCard || !modalSelectedCatalogCard) return;
+    if (!modalActiveCard || !modalPrintingNeedsSave()) return;
     const card = modalActiveCard;
     const selected = modalSelectedCatalogCard;
     const status = document.getElementById("modal-set-status");
@@ -937,22 +1435,25 @@ async function saveModalCatalogCard() {
         copy_id: card["Copy ID"] || "",
         page: card.Page, slot: card.Slot, name: card.Name, date_added: card["Date Added"],
         catalog_card_id: selected.id, set_id: selected.setId, set_name: selected.setName,
-        card_number: selected.number, catalog_rarity: selected.rarity, image_url: selected.imageUrl
+        card_number: selected.number, catalog_rarity: selected.rarity, image_url: selected.imageUrl,
+        image_source: selected.imageSource || "", image_match_id: selected.imageMatchId || ""
     };
-    status.textContent = "Saving the selected printing...";
+    status.textContent = "A guardar a nova edição…";
+    document.getElementById("modal-save-set").disabled = true;
     try {
         const response = await fetch("/api/update-card", {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
         });
         const data = await response.json();
         if (!data.success) throw new Error(data.error || "Could not save printing");
-        showToast("TCGdex printing saved.", "success");
+        showToast("Edição TCGdex guardada.", "success");
         await loadCollection();
         const refreshed = collection.find(item => card["Copy ID"] && item["Copy ID"] === card["Copy ID"]) ||
             collection.find(item => item.Page === card.Page && item.Slot === card.Slot && item["Date Added"] === card["Date Added"]);
         if (refreshed) openCardModal(refreshed.Page, refreshed.Slot, refreshed["Copy ID"] || refreshed["Date Added"]);
     } catch (error) {
         status.textContent = error.message || "Could not save the selected printing.";
+        document.getElementById("modal-save-set").disabled = false;
         showToast(status.textContent, "error");
     }
 }
@@ -1037,7 +1538,9 @@ function renderCollectionTable() {
         const spriteUrl = getCardImageSource(card);
         const spriteHtml = spriteUrl
             ? '<div class="table-sprite-frame"><img src="' + spriteUrl + '" alt="' + card.Name + '"></div>'
-            : '<div class="table-sprite-frame"><div class="pokeball-circle" style="width:16px;height:16px;border-width:2px;margin:auto;"><div style="position:absolute;height:2px;left:-2px;right:-2px;top:5px;background-color:currentColor;"></div></div></div>';
+            : card["Catalog Card ID"]
+                ? '<div class="table-sprite-frame"><span class="image-unavailable">A carregar imagem…</span></div>'
+                : '<div class="table-sprite-frame"><div class="pokeball-circle" style="width:16px;height:16px;border-width:2px;margin:auto;"><div style="position:absolute;height:2px;left:-2px;right:-2px;top:5px;background-color:currentColor;"></div></div></div>';
         const rarityCls = getRarityClass(getCardRarity(card));
         // Count of cards sharing the same page+slot (stack size)
         const slotCount = collection.filter(c => c.Page === card.Page && c.Slot === card.Slot).length;
@@ -1077,7 +1580,8 @@ function renderCollectionTable() {
             rankBadge.textContent = rank;
             row.cells[3].appendChild(rankBadge);
         }
-        const tableImage = row.querySelector(".table-sprite-frame img");
+        const spriteFrame = row.querySelector(".table-sprite-frame");
+        const tableImage = spriteFrame && spriteFrame.querySelector("img");
         if (tableImage) setCardImageFallback(tableImage, card);
         const deleteButton = row.querySelector(".btn-icon-danger");
         deleteButton.onclick = event => {
@@ -1085,6 +1589,7 @@ function renderCollectionTable() {
             deleteCardDirectly(card.Page, card.Slot, card.Name, card["Date Added"], card["Copy ID"]);
         };
         tableBody.appendChild(row);
+        if (!tableImage && card["Catalog Card ID"]) resolveCardArtwork(spriteFrame, card);
     });
 }
 
@@ -1427,7 +1932,9 @@ async function submitAddCard() {
                 set_name: selectedCatalogCard ? selectedCatalogCard.setName : "",
                 card_number: selectedCatalogCard ? selectedCatalogCard.number : "",
                 catalog_rarity: selectedCatalogCard ? selectedCatalogCard.rarity : "",
-                image_url: selectedCatalogCard ? selectedCatalogCard.imageUrl : ""
+                image_url: selectedCatalogCard ? selectedCatalogCard.imageUrl : "",
+                image_source: selectedCatalogCard ? selectedCatalogCard.imageSource || "" : "",
+                image_match_id: selectedCatalogCard ? selectedCatalogCard.imageMatchId || "" : ""
             })
         });
         
@@ -1504,57 +2011,34 @@ function openCardModal(page, slot, targetIdentifier = null) {
     }
     
     modalActiveCard = activeCard;
+    modalNotesRevision++;
     loadModalCatalogOptions(activeCard);
+    document.getElementById("modal-edit-form").classList.add("hidden");
+    document.getElementById("modal-edit-details").setAttribute("aria-expanded", "false");
     
     const modal = document.getElementById("card-modal");
     
-    // Apply rarity classes to the modal card element container
-    const modalContainer = document.querySelector(".modal-card-visual .pokemon-card-container");
-    if (modalContainer) {
-        modalContainer.className = "pokemon-card-container active";
-        if (activeCard.Type) {
-            const rarityCls = getRarityClass(activeCard.Type);
-            if (rarityCls !== "Normal") {
-                modalContainer.classList.add(rarityCls);
-            }
-        }
-    }
-    
     // Fill text properties
-    document.getElementById("modal-pokemon-name").textContent = capitalize(activeCard.Name);
-    document.getElementById("modal-details-title").textContent = `${capitalize(activeCard.Name)} Detail Specs`;
-    document.getElementById("modal-pokemon-dex").textContent = activeCard["Dex Number"] > 0 ? `#${activeCard["Dex Number"]}` : "Custom Card";
-    document.getElementById("modal-pokemon-location").textContent = `Page ${activeCard.Page}, Slot ${activeCard.Slot}`;
-    document.getElementById("modal-pokemon-date").textContent = activeCard["Date Added"] || "Unknown";
-    document.getElementById("modal-pokemon-notes").textContent = activeCard.Notes || "No notes available for this card.";
+    document.getElementById("modal-details-title").textContent = capitalize(activeCard.Name);
+    document.getElementById("modal-pokemon-location").textContent = `Página ${activeCard.Page} · Espaço ${activeCard.Slot}`;
+    document.getElementById("modal-pokemon-date").textContent = activeCard["Date Added"] ? `Adicionada em ${activeCard["Date Added"]}` : "Data não disponível";
+    const notes = document.getElementById("modal-pokemon-notes");
+    notes.value = String(activeCard.Notes || "");
+    document.getElementById("modal-notes-status").textContent = "";
     renderModalGrade(activeCard);
-    document.getElementById("modal-current-set").textContent = activeCard["Set Name"]
-        ? activeCard["Set Name"] + " - #" + (activeCard["Card Number"] || "?")
-        : "No TCGdex printing selected.";
     
     // Set type (rarity) badge
     const typeBadge = document.getElementById("modal-pokemon-type");
     if (typeBadge) {
         typeBadge.textContent = getCardRarity(activeCard);
         const rarityCls = getRarityClass(getCardRarity(activeCard));
-        typeBadge.className = `badge ${rarityCls}`;
+        typeBadge.className = `modal-pokemon-type badge ${rarityCls} rarity-${rarityCls.toLowerCase()}`;
     }
     
     // Set condition badge
     const badge = document.getElementById("modal-pokemon-condition");
-    badge.textContent = activeCard.Condition;
-    badge.className = `badge ${activeCard.Condition}`;
-    
-    // Render artwork or placeholder
-    const artworkImg = document.getElementById("modal-pokemon-image");
-    const imageUrl = getCardImageSource(activeCard);
-    if (imageUrl) {
-        artworkImg.src = imageUrl;
-        setCardImageFallback(artworkImg, activeCard);
-        artworkImg.style.display = "block";
-    } else {
-        artworkImg.style.display = "none";
-    }
+    badge.textContent = activeCard.Condition || "—";
+    badge.className = activeCard.Condition ? `badge ${activeCard.Condition}` : "";
     
     // Manage stacked items UI list
     const stackedSection = document.getElementById("modal-stacked-section");
@@ -1594,10 +2078,53 @@ function openCardModal(page, slot, targetIdentifier = null) {
     modal.classList.remove("hidden");
 }
 
+async function saveModalNotes() {
+    if (!modalActiveCard) return;
+    const card = modalActiveCard;
+    const notes = document.getElementById("modal-pokemon-notes").value.trim();
+    if (notes === String(card.Notes || "").trim()) return;
+    const revision = ++modalNotesRevision;
+    const status = document.getElementById("modal-notes-status");
+    status.textContent = "A guardar…";
+    try {
+        const response = await fetch("/api/update-card", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                copy_id: card["Copy ID"] || "", page: card.Page, slot: card.Slot,
+                name: card.Name, date_added: card["Date Added"], notes
+            })
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || "Não foi possível guardar a nota.");
+        card.Notes = notes;
+        if (revision === modalNotesRevision) status.textContent = "Nota guardada.";
+        await loadCollection();
+    } catch (error) {
+        if (revision === modalNotesRevision) status.textContent = error.message || "Não foi possível guardar a nota.";
+    }
+}
+
 function closeCardModal(e) {
     document.getElementById("card-modal").classList.add("hidden");
     modalActiveCard = null;
+    modalSavedCatalogCard = null;
+    modalSelectedCatalogCard = null;
+    modalCatalogRevision++;
+    modalSelectionRevision++;
+    modalArtworkRevision++;
+    modalNotesRevision++;
+    modalArtworkUrl = "";
+    modalArtworkIsCard = false;
+    document.getElementById("modal-image-viewer").classList.add("hidden");
 }
+
+document.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    const viewer = document.getElementById("modal-image-viewer");
+    if (viewer && !viewer.classList.contains("hidden")) closeModalImageViewer();
+    else if (!document.getElementById("card-modal").classList.contains("hidden")) closeCardModal();
+});
 
 async function deleteCardFromModal() {
     if (!modalActiveCard) return;

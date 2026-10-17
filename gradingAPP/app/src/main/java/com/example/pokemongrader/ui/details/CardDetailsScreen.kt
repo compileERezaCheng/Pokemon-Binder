@@ -8,6 +8,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,12 +18,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.pokemongrader.data.CatalogCard
+import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
+import com.example.pokemongrader.data.TcgDexClient
 import com.example.pokemongrader.ui.components.CatalogSetPicker
 import com.example.pokemongrader.ui.components.GradeSummary
 import com.example.pokemongrader.ui.components.PokemonCard
+import com.example.pokemongrader.ui.main.AsyncImage
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,7 +54,8 @@ fun CardDetailsScreen(
     val currentCatalog = card?.catalogCardId?.takeIf { it.isNotBlank() }?.let {
         CatalogCard(
             id = card.catalogCardId, name = card.name, setId = card.setId, setName = card.setName,
-            number = card.cardNumber, rarity = card.catalogRarity, imageUrl = card.imageUrl
+            number = card.cardNumber, rarity = card.catalogRarity, imageUrl = card.imageUrl,
+            imageSource = card.imageSource, imageMatchId = card.imageMatchId
         )
     }
     var selectedCatalog by remember(card?.copyId) { mutableStateOf(currentCatalog) }
@@ -82,7 +89,23 @@ fun CardDetailsScreen(
                 modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                PokemonCard(card = card, modifier = Modifier.fillMaxWidth(0.8f))
+                CardDetailsArtwork(
+                    card, modifier = Modifier.fillMaxWidth(0.8f),
+                    onImageFailure = {
+                        if (card.catalogCardId.isNotBlank() && card.imageSource != "Scrydex") coroutineScope.launch {
+                            val source = CatalogCard(
+                                id = card.catalogCardId, name = card.name, setId = card.setId, setName = card.setName,
+                                number = card.cardNumber, rarity = card.catalogRarity, imageUrl = card.imageUrl,
+                                imageSource = card.imageSource, imageMatchId = card.imageMatchId
+                            )
+                            val match = TcgDexClient.resolveAlternateImage(source) ?: return@launch
+                            val resolved = source.copy(imageUrl = match.imageUrl, imageSource = "Scrydex", imageMatchId = match.cardId)
+                            if (repository.updateCard(card.copy(imageUrl = match.imageUrl, imageSource = "Scrydex", imageMatchId = match.cardId))) {
+                                selectedCatalog = resolved
+                            }
+                        }
+                    }
+                )
                 Spacer(modifier = Modifier.height(20.dp))
                 GradeSummary(card.grade, card.catalogRarity, card.condition, card.gradeDetails)
                 Spacer(modifier = Modifier.height(16.dp))
@@ -106,7 +129,7 @@ fun CardDetailsScreen(
                         selected = selectedCatalog,
                         onSelected = { selectedCatalog = it }
                     )
-                    if (selectedCatalog?.id != currentCatalog?.id) {
+                    if (selectedCatalog != currentCatalog) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             enabled = !isSavingSet,
@@ -122,6 +145,8 @@ fun CardDetailsScreen(
                                         cardNumber = selection?.number.orEmpty(),
                                         catalogRarity = selection?.rarity.orEmpty(),
                                         imageUrl = selection?.imageUrl.orEmpty(),
+                                        imageSource = selection?.imageSource.orEmpty(),
+                                        imageMatchId = selection?.imageMatchId.orEmpty(),
                                         type = selection?.rarity?.ifBlank { card.type } ?: card.type
                                     )
                                     val saved = repository.updateCard(updated)
@@ -168,6 +193,34 @@ fun CardDetailsScreen(
             titleContentColor = Color.White,
             textContentColor = Color.LightGray
         )
+    }
+}
+
+@Composable
+internal fun CardDetailsArtwork(card: Card, modifier: Modifier = Modifier, onImageFailure: (() -> Unit)? = null) {
+    var enlargedImage by remember(card.copyId, card.imageUrl) { mutableStateOf<String?>(null) }
+    PokemonCard(card, modifier, onImageClick = { enlargedImage = it }, onImageFailure = onImageFailure)
+    enlargedImage?.let { image ->
+        Dialog(
+            onDismissRequest = { enlargedImage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().background(Color(0xFF020617)).safeDrawingPadding().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                IconButton(onClick = { enlargedImage = null }, modifier = Modifier.align(Alignment.End)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close image", tint = Color.White)
+                }
+                AsyncImage(
+                    url = image.replace("/low.", "/high."),
+                    fallbackUrl = image,
+                    contentDescription = "Enlarged " + card.name + " card",
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    placeholder = "Image unavailable"
+                )
+            }
+        }
     }
 }
 

@@ -416,7 +416,7 @@ def save_config(config):
     except Exception as e:
         print(f"{CLR_FAIL}[!] Error saving configuration: {e}{CLR_RESET}")
 
-COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details"]
+COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID"]
 
 def load_collection():
     collection = []
@@ -626,7 +626,9 @@ def sync_with_google_sheets(config, collection):
                 card.get("Card Number", ""),
                 card.get("Catalog Rarity", ""),
                 card.get("Grade", ""),
-                card.get("Grade Details", "")
+                card.get("Grade Details", ""),
+                card.get("Image Source", ""),
+                card.get("Image Match ID", "")
             ])
             
         worksheet.clear()
