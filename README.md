@@ -1,6 +1,6 @@
-# 📖 Pokémon Card Binder Manager ✨
+# 📖 Pokemon Card Binder Manager ✨
 
-A dual-platform virtual Pokémon card ecosystem to manage, sync, and showcase your collection!
+A dual-platform virtual Pokemon card ecosystem to manage, sync, and showcase your collection!
 
 This project consists of a **glassmorphic PC Web Application** and a **native Android Companion App**. Both platforms synchronize collections via **Firebase**, featuring realistic double-page spreads, AI-powered card scanning, and customizable trainer profiles. The PC app pulls updates when opened or refreshed, subject to a five-minute sync cooldown.
 
