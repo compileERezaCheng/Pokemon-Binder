@@ -2,6 +2,9 @@
 **/secrets.properties
 **/local.properties
 **/google-services.json
+*.jks
+*.keystore
+*.p12
 URGENT_UPDATES.md
 temp.md
 app_logo.png
@@ -42,6 +45,11 @@ binder/data/pokemon_cache.json
 binder/data/cover_image.png
 binder/data/sync_state.json
 binder/data/debug_sync.log
+binder/data/accounts/
+binder/data/profile.json
+binder/data/profile_image.png
+binder/data/firebase_client_config.json
+binder/data/*.bak
 
 # Windows junk
 Thumbs.db

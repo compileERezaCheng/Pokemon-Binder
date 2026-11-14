@@ -25,11 +25,13 @@ android {
         }
         val encApiKey = secrets.getProperty("ENC_FIREBASE_API_KEY", "PLACEHOLDER_ENC_API_KEY")
         val encDbUrl = secrets.getProperty("ENC_FIREBASE_DB_URL", "PLACEHOLDER_ENC_DB_URL")
-        val encGeminiApiKey = secrets.getProperty("ENC_GEMINI_API_KEY", "PLACEHOLDER_ENC_GEMINI_API_KEY")
-        
+        val firebaseAppId = secrets.getProperty("FIREBASE_APP_ID", "")
+        val firebaseProjectId = secrets.getProperty("FIREBASE_PROJECT_ID", "")
+
         buildConfigField("String", "ENC_FIREBASE_API_KEY", "\"$encApiKey\"")
         buildConfigField("String", "ENC_FIREBASE_DB_URL", "\"$encDbUrl\"")
-        buildConfigField("String", "ENC_GEMINI_API_KEY", "\"$encGeminiApiKey\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"$firebaseAppId\"")
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"$firebaseProjectId\"")
     }
 
     buildTypes {
@@ -107,8 +109,10 @@ dependencies {
   implementation(libs.androidx.camera.lifecycle)
   implementation(libs.androidx.camera.view)
 
-  // Gemini AI
-  implementation(libs.google.generativeai)
+  // Firebase AI Logic and App Check for direct APK distribution.
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.ai)
+  implementation(libs.firebase.appcheck.playintegrity)
 
   // Image Processing
   implementation("androidx.exifinterface:exifinterface:1.3.7")

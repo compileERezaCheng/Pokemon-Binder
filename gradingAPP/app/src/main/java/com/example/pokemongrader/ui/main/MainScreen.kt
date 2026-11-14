@@ -10,9 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -29,14 +26,17 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Refresh
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.LinearEasing
@@ -66,7 +66,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
@@ -271,7 +270,7 @@ fun ProfileImage(
     modifier: Modifier = Modifier
 ) {
     if (source == "url" && url.isNotEmpty()) {
-        AsyncImage(url = url, contentDescription = "Profile", modifier = modifier)
+        AsyncImage(url = url, contentDescription = "Profile", modifier = modifier, placeholder = "●")
     } else if ((source == "base64" || source == "upload") && base64Str.isNotEmpty()) {
         val bitmap = remember(base64Str) {
             try {
@@ -282,11 +281,11 @@ fun ProfileImage(
         if (bitmap != null) {
             Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Profile", modifier = modifier)
         } else {
-            Box(modifier = modifier.background(Color.DarkGray))
+            Box(modifier = modifier.background(Color.DarkGray), contentAlignment = Alignment.Center) { Text("●", color = Color.LightGray) }
         }
     } else {
         val pUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$dex.png"
-        AsyncImage(url = pUrl, contentDescription = "Profile", modifier = modifier)
+        AsyncImage(url = pUrl, contentDescription = "Profile", modifier = modifier, placeholder = "●")
     }
 }
 
@@ -305,16 +304,18 @@ fun MainScreen(
 ) {
     val cards by repository.cards.collectAsStateWithLifecycle()
     val isLoading by repository.isLoading.collectAsStateWithLifecycle()
-    val username by repository.username.collectAsStateWithLifecycle()
+    val errorMessage by repository.errorMessage.collectAsStateWithLifecycle()
     val profilePicSource by repository.profilePicSource.collectAsStateWithLifecycle()
     val profileFeaturedDex by repository.profileFeaturedDex.collectAsStateWithLifecycle()
     val profileImageUrl by repository.profileImageUrl.collectAsStateWithLifecycle()
     val profileImageBase64 by repository.profileImageBase64.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
-    val compact = LocalConfiguration.current.screenHeightDp < 500
-    val gridState = rememberLazyGridState()
-    LaunchedEffect(currentPage) { gridState.scrollToItem(0) }
+    val marketModel: MarketViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val marketState by marketModel.state.collectAsStateWithLifecycle()
+    val navigationColors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White,
+        unselectedIconColor = Color.LightGray, indicatorColor = Color(0xFF1E293B))
+    BackHandler(activeTab != "binder") { onActiveTabChange("binder") }
 
     // Filter and Sort states for Collection List
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -369,85 +370,45 @@ fun MainScreen(
         }
     }
 
-    // Pull-to-refresh: wrap the entire screen content
-    PullToRefreshBox(
-        isRefreshing = isLoading,
-        onRefresh = { coroutineScope.launch { repository.refreshAndFetch() } },
-        modifier = modifier.fillMaxSize().background(Color(0xFF020617))
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-
-                // Profile Header (refresh button removed — pull-to-refresh is the gesture now)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Brush.horizontalGradient(listOf(Color(0x1F3B82F6), Color(0x1F1D4ED8))))
-                        .border(1.dp, Color(0x333B82F6), RoundedCornerShape(16.dp))
-                        .clickable { onNavigateToAccountSettings() }
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ProfileImage(
-                        source = profilePicSource,
-                        dex = profileFeaturedDex,
-                        url = profileImageUrl,
-                        base64Str = profileImageBase64,
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(CircleShape)
-                            .border(2.dp, Color(0xFF3B82F6), CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = username.capitalize(),
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
-                        Text(
-                            text = "PokeBinder Champion",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 12.sp
-                        )
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        containerColor = Color(0xFF020617),
+        contentWindowInsets = WindowInsets(0),
+        bottomBar = {
+            // Navigation.kt already applies safeDrawingPadding, including the system navigation bar.
+            Row(Modifier.fillMaxWidth().height(64.dp).background(Color(0xFF0F172A)), verticalAlignment = Alignment.CenterVertically) {
+                NavigationBarItem(activeTab == "binder", { onActiveTabChange("binder") },
+                    colors = navigationColors, icon = { Icon(Icons.Default.MenuBook, contentDescription = "Binder") })
+                NavigationBarItem(activeTab == "collection", { onActiveTabChange("collection") },
+                    colors = navigationColors, icon = { Icon(Icons.Default.Search, contentDescription = "Collection/Search") })
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    FilledIconButton(onClick = {
+                        repository.prefilledPage = null
+                        repository.prefilledSlot = null
+                        onNavigateToScan()
+                    }, modifier = Modifier.size(48.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFEF4444))) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Card", tint = Color.White)
                     }
-                    // Pull-down hint chip
-                    Text(
-                        text = "↓ pull to sync",
-                        color = Color(0xFF475569),
-                        fontSize = 10.sp
-                    )
                 }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Tab Selector
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF0F172A))
-                        .padding(4.dp)
-                ) {
-                    TabButton(
-                        text = "BINDER",
-                        isSelected = activeTab == "binder",
-                        onClick = { onActiveTabChange("binder") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    TabButton(
-                        text = "COLLECTION",
-                        isSelected = activeTab == "collection",
-                        onClick = { onActiveTabChange("collection") },
-                        modifier = Modifier.weight(1f)
-                    )
+                NavigationBarItem(activeTab == "market", { onActiveTabChange("market") },
+                    colors = navigationColors, icon = { Icon(Icons.Default.Payments, contentDescription = "Market Prices") })
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    IconButton(onClick = onNavigateToAccountSettings, modifier = Modifier.size(48.dp).semantics { contentDescription = "Account and profile" }) {
+                        ProfileImage(profilePicSource, profileFeaturedDex, profileImageUrl, profileImageBase64,
+                            Modifier.size(36.dp).clip(CircleShape))
+                    }
                 }
-
-                Spacer(modifier = Modifier.height(if (compact) 6.dp else 16.dp))
-
-                if (activeTab == "binder") {
+            }
+        }
+    ) { padding ->
+            Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                errorMessage?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) }
+                if (activeTab != "binder") {
+                    TextButton(onClick = { coroutineScope.launch { repository.refreshAndFetch() } }, enabled = !isLoading) { Text(if (isLoading) "Syncing…" else "Sync collection") }
+                }
+                if (activeTab == "market") {
+                    MarketScreen(marketState, marketModel)
+                } else if (activeTab == "binder") {
                     AnimatedContent(
                         targetState = currentPage,
                         transitionSpec = {
@@ -459,42 +420,41 @@ fun MainScreen(
                         modifier = Modifier.weight(1f)
                     ) { page ->
                         Column(modifier = Modifier.fillMaxSize()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TextButton(
-                                    onClick = { onCurrentPageChange(currentPage - 1) },
-                                    enabled = currentPage > 1
+                            Box(Modifier.fillMaxWidth().height(48.dp)) {
+                                if (page > 1) TextButton(
+                                    onClick = { onCurrentPageChange((page - 1).coerceAtLeast(1)) },
+                                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF93C5FD)),
+                                    modifier = Modifier.align(Alignment.CenterStart)
                                 ) { Text("Previous page") }
-                                Text("Page $page", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                TextButton(onClick = { onCurrentPageChange(currentPage + 1) }) { Text("Next page") }
+                                TextButton(onClick = { coroutineScope.launch { repository.refreshAndFetch() } }, enabled = !isLoading,
+                                    modifier = Modifier.align(Alignment.Center).semantics { contentDescription = "Sync collection" },
+                                    contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Page $page", color = Color.White, fontWeight = FontWeight.Bold)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color.LightGray)
+                                            Text(if (isLoading) "Syncing…" else "Sync", color = Color.LightGray, fontSize = 10.sp)
+                                        }
+                                    }
+                                }
+                                TextButton(onClick = { onCurrentPageChange(page + 1) }, colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF93C5FD)), modifier = Modifier.align(Alignment.CenterEnd)) { Text("Next page") }
                             }
-                            if (compact) Text("Scroll to see all 9 slots", color = Color.LightGray, fontSize = 11.sp)
 
                             var offsetX by remember { mutableStateOf(0f) }
-
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(3),
-                                state = gridState,
-                                contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
+                            BoxWithConstraints(
+                                modifier = Modifier.fillMaxWidth().weight(1f)
                                     .semantics { contentDescription = "Binder slots" }
-                                    .pointerInput(Unit) {
+                                    .pointerInput(page) {
                                         detectHorizontalDragGestures(
                                             onDragEnd = {
                                                 if (offsetX < -150f) {
-                                                    onCurrentPageChange(currentPage + 1)
-                                                } else if (offsetX > 150f && currentPage > 1) {
-                                                    onCurrentPageChange(currentPage - 1)
+                                                    onCurrentPageChange(page + 1)
+                                                } else if (offsetX > 150f && page > 1) {
+                                                    onCurrentPageChange((page - 1).coerceAtLeast(1))
                                                 }
                                                 offsetX = 0f
                                             },
+                                            onDragCancel = { offsetX = 0f },
                                             onHorizontalDrag = { change, dragAmount ->
                                                 change.consume()
                                                 offsetX += dragAmount
@@ -502,12 +462,22 @@ fun MainScreen(
                                         )
                                     }
                             ) {
-                                items(9) { index ->
+                                val gap = 4.dp
+                                val availableHeight = ((maxHeight - gap * 2) / 3).coerceAtLeast(1.dp)
+                                val cellWidth = minOf((maxWidth - gap * 2) / 3, maxOf(48.dp, availableHeight * 0.7f))
+                                val cellHeight = minOf(availableHeight, cellWidth / 0.7f)
+                                Column(Modifier.align(Alignment.Center), verticalArrangement = Arrangement.spacedBy(gap)) {
+                                  repeat(3) { row ->
+                                   Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                                    repeat(3) { column ->
+                                    val index = row * 3 + column
                                     val slotIndex = index + 1
                                     val pocketCards = cards.filter { it.page == page && it.slot == slotIndex }
                                     PocketCell(
                                         slot = slotIndex,
                                         cards = pocketCards,
+                                        modifier = Modifier.size(cellWidth, cellHeight),
+                                        compact = cellHeight < 110.dp,
                                         onClick = {
                                             if (pocketCards.isNotEmpty()) {
                                                 val topCard = pocketCards.minByOrNull { getRarityRank(it.type) }!!
@@ -519,6 +489,9 @@ fun MainScreen(
                                             }
                                         }
                                     )
+                                    }
+                                   }
+                                  }
                                 }
                             }
                         }
@@ -625,7 +598,7 @@ fun MainScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         LazyColumn(
-                            contentPadding = PaddingValues(bottom = 80.dp),
+                            contentPadding = PaddingValues(bottom = 8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(filteredCards) { card ->
@@ -639,44 +612,6 @@ fun MainScreen(
                 }
             }
 
-            // Floating Scan Button
-            FloatingActionButton(
-                onClick = {
-                    repository.prefilledPage = null
-                    repository.prefilledSlot = null
-                    onNavigateToScan()
-                },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
-                containerColor = Color(0xFFEF4444)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Card", tint = Color.White)
-            }
-        }
-    }
-}
-
-@Composable
-fun TabButton(
-    text: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .padding(2.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isSelected) Color(0xFF1E293B) else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            color = if (isSelected) Color.White else Color.Gray,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
-        )
     }
 }
 
@@ -684,6 +619,8 @@ fun TabButton(
 fun PocketCell(
     slot: Int,
     cards: List<Card>,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
     val topCard = remember(cards) {
@@ -691,8 +628,8 @@ fun PocketCell(
     }
     
     Box(
-        modifier = Modifier
-            .aspectRatio(0.7f)
+        modifier = modifier
+            .semantics { contentDescription = "Slot $slot" }
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0x1F1E293B))
             .border(
@@ -719,7 +656,7 @@ fun PocketCell(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
+                if (!compact) Row(
                     modifier = Modifier.fillMaxWidth().padding(4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -762,7 +699,7 @@ fun PocketCell(
                     AsyncImage(
                         url = imageUrl,
                         contentDescription = topCard.name,
-                        modifier = Modifier.size(54.dp).weight(1f)
+                        modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
@@ -811,8 +748,7 @@ fun PocketCell(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("+", color = Color(0x66FFFFFF), fontSize = 24.sp)
-                Spacer(modifier = Modifier.height(4.dp))
+                if (!compact) Text("+", color = Color(0x66FFFFFF), fontSize = 24.sp)
                 Text("Slot $slot", color = Color(0x66FFFFFF), fontSize = 10.sp)
             }
         }

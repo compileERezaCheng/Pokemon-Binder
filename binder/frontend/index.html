@@ -87,6 +87,9 @@
                     </svg>
                     <span>Add Pokémon</span>
                 </button>
+                <button id="nav-btn-market" class="nav-item" onclick="switchTab('market')">
+                    <span class="nav-icon" aria-hidden="true">€</span><span>Market Prices</span>
+                </button>
                 <button id="nav-btn-settings" class="nav-item" onclick="switchTab('settings')">
                     <svg class="nav-icon" viewBox="0 0 24 24" width="20" height="20">
                         <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
@@ -191,6 +194,57 @@
                     <button id="page-turn-next" type="button" class="page-turn-button page-turn-next" onclick="changePage(2)" aria-label="Next binder spread" title="Next spread" hidden>
                         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
                     </button>
+                </div>
+            </section>
+
+            <section id="view-market" class="view-section">
+                <div class="market-intro">
+                    <span class="badge">CARDMARKET / EUR · TCGPLAYER / USD</span>
+                    <h2>Your next card, at a glance.</h2>
+                    <p>Find an edition. Compare its finishes. See the price before you open it.</p>
+                </div>
+                <div class="market-filters">
+                    <label>Card name<input id="market-name" class="catalog-set-search" placeholder="Search Pikachu, Charizard, Mew…" oninput="scheduleMarketSearch()" autocomplete="off"></label>
+                    <label>Set / expansion<select id="market-set" class="catalog-set-search" onchange="scheduleMarketSearch()"><option value="">All sets</option></select></label>
+                    <label>Card number<input id="market-number" class="catalog-set-search" placeholder="# e.g. 25" oninput="scheduleMarketSearch()"></label>
+                </div>
+                <div class="market-layout">
+                    <div class="market-results">
+                        <p id="market-status" role="status" aria-live="polite">Search a card name to discover its editions.</p>
+                        <button id="market-retry" type="button" class="btn-secondary" onclick="retryMarket()" hidden>Retry search</button>
+                        <div id="market-options" aria-label="Select an edition"></div>
+                        <button id="market-more" type="button" class="btn-secondary" onclick="loadMoreMarket()" hidden>Show more editions</button>
+                    </div>
+                    <aside id="market-prices" class="market-detail-panel" aria-label="Selected edition prices">
+                        <div id="market-empty" class="market-empty">
+                            <span class="market-empty-symbol" aria-hidden="true">↗</span>
+                            <h3>Choose an edition</h3>
+                            <p>Artwork, set and card number help you find the right card. Its price and finishes appear here.</p>
+                        </div>
+                        <div id="market-details" hidden>
+                            <div class="market-detail-heading">
+                                <span class="badge">ENGLISH CATALOG · UNCERTIFIED</span>
+                                <h3 id="market-card-name"></h3>
+                                <p id="market-card-set"></p>
+                            </div>
+                            <div class="market-detail-top">
+                                <div class="market-art"><span id="market-art-empty">Image unavailable</span><img id="market-card-image" alt="" hidden></div>
+                                <div class="market-quote">
+                                    <span id="market-price-type" class="market-quote-label"></span>
+                                    <strong id="market-price-value"></strong>
+                                    <p id="market-detail-status" role="status" aria-live="polite"></p>
+                                </div>
+                            </div>
+                            <div id="market-quote-controls" hidden>
+                                <label class="market-variant-label">Finish / price source<select id="market-variant" class="catalog-set-search" onchange="renderMarketGroup()"></select></label>
+                                <div id="market-price-metrics" class="market-metrics"></div>
+                                <p id="market-price-source" class="market-source"></p>
+                                <p id="market-price-date" class="market-source"></p>
+                            </div>
+                            <button id="market-detail-retry" type="button" class="btn-secondary" onclick="retryMarket()" hidden>Refresh price</button>
+                            <details class="market-reference-note"><summary>About these references</summary><p>Cardmarket averages, trends and lows differ from TCGplayer market prices. Edition references do not confirm a specific variant. Marketplace condition and language are unspecified. AI grades are not certification. Data supplied by TCGdex.</p></details>
+                        </div>
+                    </aside>
                 </div>
             </section>
 
@@ -541,6 +595,8 @@
                                 <svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle; margin-right:6px;"><path fill="currentColor" d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
                                 Disconnect Firebase
                             </button>
+                            <button id="profile-import-legacy" class="btn-secondary hidden" onclick="importLegacyCollection()">Import previous local collection</button>
+                            <small>This copies unassigned old PC cards to the account currently signed in.</small>
                         </div>
                     </div>
                 </div>
@@ -657,6 +713,7 @@
         <button class="modal-image-viewer-close" type="button" aria-label="Fechar imagem ampliada" onclick="closeModalImageViewer()">×</button>
         <img id="modal-image-viewer-image" src="" alt="">
     </div>
+    <script src="market.js"></script>
     <script src="index.js"></script>
 </body>
 </html>

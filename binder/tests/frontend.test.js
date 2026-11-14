@@ -10,6 +10,313 @@ const styles = fs.readFileSync(path.join(__dirname, '../frontend/index.css'), 'u
 const server = fs.readFileSync(path.join(__dirname, '../backend/pokemon_server.py'), 'utf8');
 const binder = fs.readFileSync(path.join(__dirname, '../backend/pokemon_binder.py'), 'utf8');
 
+test('market prices keep printing, finish, currency and price type separate', () => {
+    const { parsePrices } = require('../frontend/market.js');
+    const card = { id: 'base1-4', localId: '4', name: 'Charizard', set: { id: 'base1' }, pricing: {
+        cardmarket: { unit: 'EUR', updated: '2026-10-20', avg: 12, 'avg-holo': 25, trend: null },
+        tcgplayer: { unit: 'USD', holofoil: { marketPrice: 30, lowPrice: null } }
+    } };
+    const rows = parsePrices(card, { id: 'base1-4', setId: 'base1', number: '4' }, 'queried');
+    assert.equal(rows[0].currency, 'EUR');
+    assert.equal(rows[0].type, 'Average');
+    assert.equal(rows[1].variant, 'Foil (finish unspecified)');
+    assert.equal(rows[2].type, 'Market price');
+    assert.equal(rows[2].dateLabel, 'Consulted');
+    assert.equal(rows[2].updated, 'queried');
+    assert.deepEqual(parsePrices(card, { id: 'other' }), []);
+    assert.deepEqual(parsePrices({ ...card, pricing: null }, { id: card.id }), []);
+    assert.deepEqual(parsePrices({ ...card, pricing: { cardmarket: { unit: 'EUR', avg: '12', low: -1 } } }, { id: card.id }), []);
+});
+
+test('market default fetch keeps the browser Window receiver', async () => {
+    const browser = { AbortController, setTimeout, clearTimeout };
+    const marketSource = fs.readFileSync(path.join(__dirname, '../frontend/market.js'), 'utf8');
+    const pending = vm.runInNewContext(`${marketSource}
+        globalThis.fetch = function (url, options) {
+            if (this !== globalThis) throw new TypeError('Illegal invocation');
+            globalThis.request = { url, signal: options.signal };
+            return Promise.resolve({ ok: true, json: async () => ({ id: 'base1-4' }) });
+        };
+        new MarketClient().get('cards/base1-4');
+    `, browser);
+    assert.equal((await pending).data.id, 'base1-4');
+    assert.equal(browser.request.url, 'https://api.tcgdex.net/v2/en/cards/base1-4');
+    assert.equal(browser.request.signal instanceof AbortSignal, true);
+});
+
+test('market cache deduplicates requests, expires and retains stale data on failure', async () => {
+    const { MarketClient } = require('../frontend/market.js');
+    let now = 0, calls = 0, fail = false;
+    const client = new MarketClient(async () => {
+        calls++;
+        if (fail) throw new Error('offline');
+        return { ok: true, json: async () => ({ id: 'base1-4' }) };
+    }, () => now);
+    const [a, b] = await Promise.all([client.get('cards/base1-4'), client.get('cards/base1-4')]);
+    assert.equal(calls, 1);
+    assert.equal(a.data.id, b.data.id);
+    await client.get('cards/base1-4');
+    assert.equal(calls, 1);
+    now = 3600001; fail = true;
+    const stale = await client.get('cards/base1-4');
+    assert.equal(stale.stale, true);
+    assert.equal(stale.error, 'offline');
+});
+
+test('market manual refresh bypasses a fresh cached response', async () => {
+    const { MarketClient } = require('../frontend/market.js');
+    let calls = 0;
+    const client = new MarketClient(async () => ({ ok: true, json: async () => ({ version: ++calls }) }));
+    assert.equal((await client.get('cards/base1-4')).data.version, 1);
+    assert.equal((await client.get('cards/base1-4')).data.version, 1);
+    assert.equal((await client.get('cards/base1-4', true)).data.version, 2);
+});
+
+test('detailed market variants do not borrow another finish or root pricing', () => {
+    const { parsePrices } = require('../frontend/market.js');
+    const card = { id: 'base1-4', pricing: { cardmarket: { unit: 'EUR', avg: 999 } }, variants_detailed: [
+        null,
+        { type: 'normal', pricing: { cardmarket: { unit: 'EUR', avg: 1, 'avg-holo': 2 } } },
+        { type: 'reverse', pricing: { cardmarket: { unit: 'EUR', avg: 1, 'avg-holo': 2 } } },
+        { type: 'holo' }
+    ] };
+    assert.deepEqual(parsePrices(card, { id: card.id }).map(p => p.amount), [1, 2]);
+});
+
+test('market keeps edition references when detailed variants have no usable quote', () => {
+    const { parsePrices } = require('../frontend/market.js');
+    const card = { id: 'xyp-XY202', variants_detailed: [{ type: 'normal' }],
+        pricing: { cardmarket: { unit: 'EUR', avg: 79.71, low: 12.99, trend: 78.07 } } };
+    const rows = parsePrices(card, { id: card.id });
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].amount, 79.71);
+    assert.equal(rows.every(row => row.referenceOnly && !row.variantId), true);
+    assert.match(rows[0].variant, /finish unconfirmed/i);
+    const holo = { ...card, variants_detailed: [{ type: 'holo', pricing: {
+        cardmarket: { unit: 'EUR', avg: 79.71, low: 12.99, 'trend-holo': 0 }
+    } }] };
+    assert.equal(parsePrices(holo, { id: card.id }).some(row => row.amount === 79.71), true);
+    assert.equal(parsePrices(holo, { id: card.id }).some(row => row.amount === 0), false);
+});
+
+test('market groups metrics into one price per finish and prefers an EUR trend over a low', () => {
+    const { groupMarketPrices } = require('../frontend/market.js');
+    const base = { currency: 'EUR', source: 'Cardmarket', variant: 'normal', variantId: 'normal' };
+    const groups = groupMarketPrices([
+        { ...base, type: 'Low', amount: 1 }, { ...base, type: 'Average', amount: 3 },
+        { ...base, type: 'Trend', amount: 4 },
+        { ...base, currency: 'USD', source: 'TCGplayer', type: 'Market price', amount: 5 }
+    ]);
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].primary.amount, 4);
+    assert.equal(groups[0].prices.length, 3);
+    assert.equal(groups[1].primary.type, 'Market price');
+});
+
+test('market API limits have a cooldown and errors do not become cached prices', async () => {
+    const { MarketClient } = require('../frontend/market.js');
+    let now = 0, calls = 0;
+    const client = new MarketClient(async () => {
+        calls++;
+        return calls === 1 ? { status: 429, headers: { get: () => '2' } } : { ok: true, json: async () => ({}) };
+    }, () => now);
+    await assert.rejects(client.get('cards/base1-4'), /limit/);
+    await assert.rejects(client.get('cards/base1-4'), /limit/);
+    assert.equal(calls, 1);
+    now = 2001;
+    assert.equal((await client.get('cards/base1-4')).stale, false);
+    assert.equal(calls, 2);
+});
+
+test('market search ignores a previous response after the query changes', async () => {
+    const old = deferred();
+    const app = loadInteractiveApp((url, options, fallback) => String(url).includes('name=old') ? old.promise : fallback(url, options));
+    app.document.getElementById('market-name').value = 'old';
+    const pending = app.api.runMarketSearch();
+    app.document.getElementById('market-name').value = 'pikachu';
+    await app.api.runMarketSearch();
+    old.resolve(app.jsonResponse([{ id: 'wrong-1', name: 'Wrong', localId: '1' }]));
+    await pending;
+    const options = app.elements.get('market-options').children;
+    assert.equal(options.length, 2);
+    assert.match(options[0].children[1].textContent, /Pikachu.*Base/s);
+    assert.doesNotMatch(app.elements.get('market-status').textContent, /Wrong/);
+});
+
+test('market results preview prices and selection shows a single grouped quote in the adjacent panel', async () => {
+    const app = loadInteractiveApp((url, options, fallback) => String(url).endsWith('/cards/base1-25') ? app.jsonResponse({
+        id: 'base1-25', localId: '25', set: { id: 'base1' }, name: 'Pikachu',
+        pricing: { cardmarket: { unit: 'EUR', updated: '2026-10-22', avg: 3, trend: 4, low: 1 } }
+    }) : fallback(url, options));
+    app.document.getElementById('market-name').value = 'pikachu';
+    await app.api.runMarketSearch();
+    assert.match(app.elements.get('market-options').children[0].children[2].textContent, /4[.,]00/);
+    await app.elements.get('market-options').children[0].click();
+    assert.match(app.elements.get('market-price-value').textContent, /4[.,]00/);
+    assert.equal(app.elements.get('market-price-type').textContent, 'Trend');
+    assert.equal(app.elements.get('market-price-metrics').children.length, 2);
+    assert.equal(app.elements.get('market-variant').children.length, 1);
+    assert.equal(app.elements.get('market-options').children[0].getAttribute('aria-pressed'), 'true');
+    assert.equal(app.elements.get('market-retry').hidden, true);
+});
+
+test('legacy collection import asks before posting to the signed-in account', async () => {
+    const app = loadInteractiveApp();
+
+    await app.api.importLegacyCollection();
+
+    assert.match(app.confirmations[0], /current Firebase account/i);
+    const request = app.requests.find(item => item.url === '/api/firebase/import-legacy');
+    assert.equal(request.options.method, 'POST');
+    assert.deepEqual(JSON.parse(request.options.body), { confirm: true });
+});
+
+test('late Windows login response cannot switch the selected account back', async () => {
+    const oldLogin = deferred();
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === '/api/firebase/login') {
+            const email = JSON.parse(options.body).email;
+            return email.startsWith('a@') ? oldLogin.promise : app.jsonResponse({ success: true, config: {
+                firebase_enabled: true, firebase_email: email, firebase_user_id: 'uid-B', legacy_collection_available: false
+            } });
+        }
+        if (url === '/api/collection') return app.jsonResponse([{ Name: 'card-B' }]);
+        return fallback(url, options);
+    });
+    app.api.stubDataRendering();
+    app.document.getElementById('login-email').value = 'a@example.test';
+    app.document.getElementById('login-password').value = 'pw';
+    const loginA = app.api.loginFirebasePC();
+    app.document.getElementById('login-email').value = 'b@example.test';
+    const loginB = app.api.loginFirebasePC();
+    await loginB;
+    oldLogin.resolve(app.jsonResponse({ success: true, config: {
+        firebase_enabled: true, firebase_email: 'a@example.test', firebase_user_id: 'uid-A', legacy_collection_available: false
+    } }));
+    await loginA;
+
+    assert.equal(app.api.config().firebase_user_id, 'uid-B');
+    assert.deepEqual(app.api.collection().map(card => card.Name), ['card-B']);
+});
+
+test('late Windows collection response cannot replace cards after account switch', async () => {
+    const oldCollection = deferred();
+    let resolveOldStarted;
+    const oldStarted = new Promise(resolve => { resolveOldStarted = resolve; });
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === '/api/firebase/login') {
+            const email = JSON.parse(options.body).email;
+            return app.jsonResponse({ success: true, config: {
+                firebase_enabled: true, firebase_email: email,
+                firebase_user_id: email.startsWith('a@') ? 'uid-A' : 'uid-B', legacy_collection_available: false
+            } });
+        }
+        if (url === '/api/collection') {
+            if (app.api.config().firebase_user_id === 'uid-A') {
+                resolveOldStarted();
+                return oldCollection.promise;
+            }
+            return app.jsonResponse([{ Name: 'card-B' }]);
+        }
+        return fallback(url, options);
+    });
+    app.api.stubDataRendering();
+    app.document.getElementById('login-email').value = 'a@example.test';
+    app.document.getElementById('login-password').value = 'pw';
+    const loginA = app.api.loginFirebasePC();
+    await oldStarted;
+    app.document.getElementById('login-email').value = 'b@example.test';
+    const loginB = app.api.loginFirebasePC();
+    await loginB;
+    oldCollection.resolve(app.jsonResponse([{ Name: 'card-A' }]));
+    await loginA;
+
+    assert.equal(app.api.config().firebase_user_id, 'uid-B');
+    assert.deepEqual(app.api.collection().map(card => card.Name), ['card-B']);
+});
+
+test('Windows Sync immediately shows cards added and removed on another device', async () => {
+    const sync = deferred();
+    const cardsBefore = [{ Name: 'Pikachu' }, { Name: 'Charmander' }];
+    const cardsAfter = [{ Name: 'Pikachu' }, { Name: 'Eevee' }];
+    let savedCards = cardsBefore;
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === '/api/firebase/login') return app.jsonResponse({ success: true, config: {
+            firebase_enabled: true, firebase_user_id: 'uid-A'
+        } });
+        if (url === '/api/collection') return app.jsonResponse(savedCards);
+        if (url === '/api/sync') return sync.promise;
+        return fallback(url, options);
+    });
+    const binder = [];
+    const table = [];
+    app.api.stubDataRendering(cards => {
+        binder.splice(0, binder.length, ...cards.map(card => card.Name));
+    }, cards => {
+        table.splice(0, table.length, ...cards.map(card => card.Name));
+    });
+    app.document.getElementById('login-email').value = 'a@example.test';
+    app.document.getElementById('login-password').value = 'pw';
+    await app.api.loginFirebasePC();
+    assert.deepEqual(binder, ['Pikachu', 'Charmander']);
+    assert.deepEqual(table, ['Pikachu', 'Charmander']);
+
+    const pending = app.api.triggerManualSync();
+    assert.equal(app.document.getElementById('sync-now-sidebar-btn').disabled, true);
+    savedCards = cardsAfter;
+    sync.resolve(app.jsonResponse({ success: true }));
+    await pending;
+
+    assert.deepEqual(binder, ['Pikachu', 'Eevee']);
+    assert.deepEqual(table, ['Pikachu', 'Eevee']);
+    assert.equal(app.document.getElementById('sync-now-sidebar-btn').disabled, false);
+});
+
+test('market checks only twelve displayed editions and loads more on request', async () => {
+    let detailRequests = 0;
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (String(url).includes('cards?name=')) return app.jsonResponse(Array.from({ length: 25 }, (_, index) => ({
+            id: `base1-${index + 1}`, localId: String(index + 1), name: 'Pikachu'
+        })));
+        if (String(url).includes('/cards/')) {
+            detailRequests++;
+            const id = String(url).split('/cards/')[1];
+            return app.jsonResponse({ id, localId: id.split('-')[1], set: { id: 'base1' } });
+        }
+        return fallback(url, options);
+    });
+    app.document.getElementById('market-name').value = 'pikachu';
+    await app.api.runMarketSearch();
+    assert.equal(detailRequests, 12);
+    assert.equal(app.elements.get('market-options').children.length, 12);
+    assert.equal(app.elements.get('market-more').hidden, false);
+    await app.api.loadMoreMarket();
+    assert.equal(detailRequests, 24);
+    await app.api.loadMoreMarket();
+    assert.equal(detailRequests, 25);
+    assert.equal(app.elements.get('market-more').hidden, true);
+});
+
+test('late price details cannot overwrite the currently selected edition', async () => {
+    const old = deferred(), started = deferred();
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (String(url).endsWith('/cards/base1-25')) { started.resolve(); return old.promise; }
+        if (String(url).endsWith('/cards/neo3-12')) return app.jsonResponse({ id: 'neo3-12', localId: '12', set: { id: 'neo3' }, pricing: { cardmarket: { unit: 'EUR', trend: 5 } } });
+        return fallback(url, options);
+    });
+    app.document.getElementById('market-name').value = 'pikachu';
+    const search = app.api.runMarketSearch();
+    await started.promise;
+    const options = app.elements.get('market-options').children;
+    const firstSelection = options[0].click();
+    await options[1].click();
+    old.resolve(app.jsonResponse({ id: 'base1-25', localId: '25', set: { id: 'base1' }, pricing: { cardmarket: { unit: 'EUR', trend: 99 } } }));
+    await Promise.all([search, firstSelection]);
+    assert.match(app.elements.get('market-price-value').textContent, /5[.,]00/);
+    assert.match(app.elements.get('market-card-set').textContent, /Neo Revelation/);
+    assert.equal(options[1].getAttribute('aria-pressed'), 'true');
+});
+
 function loadApp() {
     const context = {
         document: {
@@ -73,6 +380,7 @@ function fakeElement(tagName = 'div') {
 function loadInteractiveApp(fetchOverride) {
     const elements = new Map();
     const requests = [];
+    const confirmations = [];
     const previewContainer = fakeElement();
     const document = {
         addEventListener() {},
@@ -82,7 +390,11 @@ function loadInteractiveApp(fetchOverride) {
         },
         createElement: tagName => fakeElement(tagName),
         createTextNode: text => ({ textContent: String(text) }),
-        querySelector(selector) { return selector === '.card-preview-area .pokemon-card-container' ? previewContainer : null; },
+        querySelector(selector) {
+            if (selector === '.card-preview-area .pokemon-card-container') return previewContainer;
+            if (selector === '.status-dot' || selector === '.status-text') return this.getElementById(selector);
+            return null;
+        },
         querySelectorAll() { return []; }
     };
     const addType = document.getElementById('add-type');
@@ -123,17 +435,35 @@ function loadInteractiveApp(fetchOverride) {
         document,
         window: {},
         console,
+        confirm(message) { confirmations.push(message); return true; },
+        ...require('../frontend/market.js'),
+        setTimeout, clearTimeout, AbortController,
         setInterval() {},
         fetch(url, options = {}) {
             requests.push({ url, options });
             return fetchOverride ? fetchOverride(url, options, defaultFetch) : defaultFetch(url, options);
         }
     };
+    context.MarketClient = class extends require('../frontend/market.js').MarketClient {
+        constructor() { super(context.fetch); }
+    };
     vm.runInNewContext(`${source}
 showToast = () => {};
 globalThis.api = {
+    runMarketSearch: () => { scheduleMarketSearch(); clearTimeout(marketTimer); return searchMarket(marketLatest.revision); },
+    loadMoreMarket,
     searchCatalogCards, chooseCatalogCard, filterCatalogOptions, clearAddCatalogCard, resetAddCardForm, submitAddCard,
     selectPokemonCustom, updatePreviewRarity, loadPokemonDb, handleAutocomplete,
+    importLegacyCollection: () => importLegacyCollection(),
+    loginFirebasePC: () => loginFirebasePC(),
+    triggerManualSync,
+    config: () => appConfig,
+    collection: () => collection,
+    stubDataRendering: (renderBinder = () => {}, renderTable = () => {}) => {
+        updateDashboardStats = () => {};
+        renderBinderGrid = () => renderBinder(collection);
+        renderCollectionTable = () => renderTable(collection);
+    },
     setPokemon: pokemon => { selectedPokemon = pokemon; },
     state: () => ({ selectedPokemon, selectedCatalogCard, modalSelectedCatalogCard, modalSavedCatalogCard: typeof modalSavedCatalogCard === "undefined" ? null : modalSavedCatalogCard }),
     catalogImageUrl: typeof catalogImageUrl === "function" ? catalogImageUrl : null,
@@ -149,7 +479,7 @@ globalThis.api = {
     pokemonLookup: () => pokemonLookupList,
     revisions: () => ({ add: catalogSearchRevision, modal: modalCatalogRevision })
 };`, context);
-    return { api: context.api, document, elements, requests, previewContainer, jsonResponse };
+    return { api: context.api, document, elements, requests, previewContainer, jsonResponse, confirmations };
 }
 
 async function preparePikachu(app, listId = 'add-set-options') {

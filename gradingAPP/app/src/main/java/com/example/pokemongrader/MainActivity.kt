@@ -9,11 +9,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.example.pokemongrader.data.DefaultDataRepository
+import com.example.pokemongrader.data.FirebaseAiClient
 import com.example.pokemongrader.theme.PokemonGraderTheme
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    FirebaseAiClient.initialize(applicationContext)
     val repository = DefaultDataRepository(applicationContext)
 
     enableEdgeToEdge()

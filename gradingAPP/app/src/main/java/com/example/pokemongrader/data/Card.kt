@@ -2,6 +2,7 @@ package com.example.pokemongrader.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.util.UUID
 
 data class Card(
@@ -50,7 +51,7 @@ data class Card(
     }
 
     companion object {
-        fun fromJsonObject(obj: JSONObject): Card {
+        fun fromJsonObject(obj: JSONObject, copyIdFallback: String = UUID.randomUUID().toString()): Card {
             return Card(
                 page = obj.optInt("Page", 1),
                 slot = obj.optInt("Slot", 1),
@@ -70,7 +71,7 @@ data class Card(
                 gradeDetails = obj.optString("Grade Details", ""),
                 imageSource = obj.optString("Image Source", ""),
                 imageMatchId = obj.optString("Image Match ID", ""),
-                copyId = obj.optString("Copy ID", "").ifBlank { UUID.randomUUID().toString() }
+                copyId = obj.optString("Copy ID", "").ifBlank { copyIdFallback }
             )
         }
 
@@ -81,12 +82,19 @@ data class Card(
                 if (jsonStr.trim().startsWith("[")) {
                     val array = JSONArray(jsonStr)
                     for (i in 0 until array.length()) {
-                        if (!array.isNull(i)) array.optJSONObject(i)?.let { list.add(fromJsonObject(it)) }
+                        array.optJSONObject(i)?.takeUnless { it.optBoolean("_deleted") }?.let {
+                            list.add(fromJsonObject(it, legacyCopyId(it, i)))
+                        }
                     }
                 } else if (jsonStr.trim().startsWith("{")) {
                     val obj = JSONObject(jsonStr)
                     val keys = obj.keys()
-                    while (keys.hasNext()) obj.optJSONObject(keys.next())?.let { list.add(fromJsonObject(it)) }
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        obj.optJSONObject(key)?.takeUnless { it.optBoolean("_deleted") }?.let {
+                            list.add(fromJsonObject(it, key))
+                        }
+                    }
                 }
             } catch (_: Exception) {
             }
@@ -97,6 +105,14 @@ data class Card(
             val array = JSONArray()
             collection.forEach { array.put(it.toJsonObject()) }
             return array.toString()
+        }
+
+        private fun legacyCopyId(card: JSONObject, index: Int): String {
+            val fields = listOf("Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Catalog Card ID", "Set ID", "Card Number")
+            val identity = fields.joinToString("|") { if (card.isNull(it)) "" else card.optString(it, "") } + "|" + index
+            val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8))
+            val hash = digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+            return "legacy-${hash.take(32)}"
         }
     }
 }

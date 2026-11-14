@@ -12,10 +12,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -67,9 +76,39 @@ class MainScreenTest {
   }
 
   @Test
+  fun syncErrorIsVisibleOnTheMainScreen() {
+    showMain()
+    fakeRepository.reportError("Conflict detected. Your local edit is saved for recovery.")
+
+    composeTestRule.onNodeWithText("Conflict detected. Your local edit is saved for recovery.").assertIsDisplayed()
+  }
+
+  @Test
   fun testPlaceholder_exists_whenEmpty() {
     showMain()
-    composeTestRule.onNodeWithText("Binder is Empty").assertExists()
+    composeTestRule.onNodeWithText("Slot 9").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Previous page").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Next page").performClick()
+    composeTestRule.onNodeWithText("Previous page").assertIsDisplayed().performClick()
+    composeTestRule.onNodeWithText("Page 1").assertExists()
+    composeTestRule.onNodeWithText("Previous page").assertDoesNotExist()
+  }
+
+  @Test fun bottomNavigationHasCentralAddAndAvatarOnlyProfile() {
+    showMain()
+    fakeRepository.prefilledPage = 9
+    fakeRepository.prefilledSlot = 8
+    composeTestRule.onNodeWithContentDescription("Add Card").performClick()
+    assertTrue(scanOpened)
+    assertEquals(null, fakeRepository.prefilledPage)
+    assertEquals(null, fakeRepository.prefilledSlot)
+    composeTestRule.onNodeWithContentDescription("Account and profile").performClick()
+    assertTrue(accountOpened)
+    composeTestRule.onNodeWithText("Test Trainer").assertDoesNotExist()
+    composeTestRule.onNodeWithContentDescription("Market Prices").performClick()
+    composeTestRule.onNodeWithText("Card name").assertExists()
+    composeTestRule.onNodeWithContentDescription("Binder").performClick()
+    composeTestRule.onNodeWithText("Slot 9").assertIsDisplayed()
   }
 
   @Test
@@ -79,7 +118,7 @@ class MainScreenTest {
       testCard("pikachu", 25, "Holofoil Rare", date = "later"),
       testCard("charizard", 6, "Normal")
     ))
-    composeTestRule.onNodeWithText("COLLECTION").performClick()
+    composeTestRule.onNodeWithContentDescription("Collection/Search").performClick()
     composeTestRule.onNodeWithText("Search by name or notes...").performTextInput("pika")
     composeTestRule.onAllNodesWithText("Pikachu").assertCountEquals(1)
 
@@ -87,7 +126,7 @@ class MainScreenTest {
     composeTestRule.onAllNodesWithText("Pikachu").assertCountEquals(2)
 
     composeTestRule.onNodeWithText("All").performClick()
-    composeTestRule.onNodeWithText("Holofoil Rare").performClick()
+    composeTestRule.onNode(hasText("Holofoil Rare") and hasAnyAncestor(isPopup())).performClick()
     composeTestRule.onAllNodesWithText("Pikachu").assertCountEquals(1)
     composeTestRule.onNodeWithText("Charizard").assertDoesNotExist()
   }
@@ -95,7 +134,7 @@ class MainScreenTest {
   @Test
   fun collectionSortChangesCardOrder() {
     showMain(listOf(testCard("zeta", 0), testCard("alpha", 0)))
-    composeTestRule.onNodeWithText("COLLECTION").performClick()
+    composeTestRule.onNodeWithContentDescription("Collection/Search").performClick()
     composeTestRule.onNodeWithText("Dex Number").performClick()
     composeTestRule.onNodeWithText("Name").performClick()
 
@@ -182,7 +221,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithText("Pikachu").performClick()
     assertEquals(Triple(1, 1, "rare"), openedCard)
 
-    composeTestRule.onNodeWithText("Test Trainer").performClick()
+    composeTestRule.onNodeWithContentDescription("Account and profile").performClick()
     assertTrue(accountOpened)
   }
 
@@ -194,7 +233,7 @@ class MainScreenTest {
       StatefulMainScreen(fakeRepository, {}, { _, _, _ -> }, {})
     }
 
-    composeTestRule.onNodeWithText("COLLECTION").performClick()
+    composeTestRule.onNodeWithContentDescription("Collection/Search").performClick()
     restorationTester.emulateSavedInstanceStateRestore()
 
     composeTestRule.onNodeWithText("Search by name or notes...").assertExists()
@@ -225,20 +264,34 @@ class MainScreenTest {
       }
     }
 
-    composeTestRule.onNodeWithText("Scroll to see all 9 slots").assertExists()
-    composeTestRule.onNodeWithContentDescription("Binder slots").performScrollToIndex(8)
-    composeTestRule.onNodeWithText("Slot 9").assertExists()
+    composeTestRule.onNodeWithText("Scroll to see all 9 slots").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Slot 9").assertIsDisplayed()
     composeTestRule.onNodeWithText("Next page").assertExists()
   }
 
+  @Test fun allNineSlotsAndBottomBarFitWithoutScrolling() {
+    showMain((1..9).map { slot -> testCard("card $slot", 0).copy(slot = slot) })
+    for (slot in 1..9) composeTestRule.onNodeWithContentDescription("Slot $slot").assertIsDisplayed()
+    val bottom = composeTestRule.onNodeWithContentDescription("Add Card").fetchSemanticsNode().boundsInRoot
+    val last = composeTestRule.onNodeWithContentDescription("Slot 9").fetchSemanticsNode().boundsInRoot
+    assertTrue(last.bottom <= bottom.top)
+    val page = composeTestRule.onNodeWithText("Page 1").fetchSemanticsNode().boundsInRoot
+    val root = composeTestRule.onRoot().fetchSemanticsNode().boundsInRoot
+    assertEquals(root.center.x, page.center.x, 1f)
+    composeTestRule.onNodeWithText("Previous page").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Next page").assertIsDisplayed()
+    val file = java.io.File(composeTestRule.activity.getExternalFilesDir(null), "binder-layout.png")
+    file.outputStream().use { composeTestRule.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+  }
+
   @Test
-  fun mainActivityIsLockedToPortrait() {
+  fun mainActivitySupportsLandscape() {
     val activityInfo = composeTestRule.activity.packageManager.getActivityInfo(
       ComponentName(composeTestRule.activity, MainActivity::class.java),
       0
     )
 
-    assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, activityInfo.screenOrientation)
+    assertEquals(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED, activityInfo.screenOrientation)
   }
 
   private fun testCard(name: String, dex: Int, type: String = "Normal", date: String = "now") =
@@ -262,7 +315,8 @@ private fun StatefulMainScreen(
     activeTab = activeTab.value,
     onActiveTabChange = { activeTab.value = it },
     currentPage = currentPage.intValue,
-    onCurrentPageChange = { currentPage.intValue = it }
+    onCurrentPageChange = { currentPage.intValue = it },
+    modifier = Modifier.safeDrawingPadding()
   )
 }
 
@@ -279,6 +333,7 @@ private class FakeDataRepository(initialCards: List<Card>) : DataRepository {
 
   private val _errorMessage = MutableStateFlow<String?>(null)
   override val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+  fun reportError(message: String) { _errorMessage.value = message }
 
   override val username = MutableStateFlow("Test Trainer").asStateFlow()
   override val profilePicSource = MutableStateFlow("base64").asStateFlow()

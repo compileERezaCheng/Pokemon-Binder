@@ -2,7 +2,6 @@ package com.example.pokemongrader.ui.scan
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -39,20 +38,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.example.pokemongrader.BuildConfig
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.CatalogCard
 import com.example.pokemongrader.ui.components.CatalogSetPicker
 import com.example.pokemongrader.ui.components.GradeSummary
 import com.example.pokemongrader.data.DataRepository
+import com.example.pokemongrader.data.FirebaseAiClient
 import com.example.pokemongrader.data.PokeApiClient
 import com.example.pokemongrader.data.TcgDexClient
+import com.example.pokemongrader.data.retryAiQuota
 import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.capitalize
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.content
+import com.google.firebase.ai.type.content
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -419,7 +417,7 @@ fun ScanScreen(
                                     onCardAdded(card.page)
                                     onNavigateBack()
                                 }
-                                else saveError = "Could not save the card. Check the connection and retry; photos are still here."
+                                else saveError = repository.errorMessage.value ?: "Could not save the card. Check the connection and retry; photos are still here."
                             }
                         },
                         onCancel = {
@@ -471,111 +469,51 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
     bitmap
 }
 
-private fun decryptKey(encrypted: String): String {
-    val key = "PokeGraderSecureKey2026"
-    return try {
-        val decodedBytes = Base64.decode(encrypted, Base64.DEFAULT)
-        val decodedStr = String(decodedBytes, Charsets.ISO_8859_1)
-        val sb = StringBuilder()
-        for (i in decodedStr.indices) {
-            sb.append((decodedStr[i].code xor key[i % key.length].code).toChar())
-        }
-        sb.toString()
-    } catch (e: Exception) {
-        ""
-    }
-}
-
 suspend fun identifyCardWithGemini(
     front: Bitmap,
     onRetry: (attempt: Int, delayMs: Long) -> Unit
 ): JSONObject = withContext(Dispatchers.IO) {
-    val apiKey = decryptKey(BuildConfig.ENC_GEMINI_API_KEY)
-    if (apiKey.isEmpty() || apiKey == "PLACEHOLDER_ENC_GEMINI_API_KEY") {
-        throw Exception("Gemini API Key missing or invalid.")
-    }
+    val generativeModel = FirebaseAiClient.model()
 
-    val modelVariations = listOf("gemini-3.5-flash-lite")
-    var lastException: Exception? = null
+    val prompt = """
+        Analyze the front image of this physical Pokémon card.
+        Identify the standard English card name, national Pokedex number, visible rarity,
+        expansion set name, and printed card number (including letters such as TG or SV).
+        If the set or card number is not readable, return an empty string for that field.
+        If identification is uncertain, return an empty name.
 
-    for (modelName in modelVariations) {
-        try {
-            val generativeModel = GenerativeModel(
-                modelName = modelName,
-                apiKey = apiKey
-            )
-
-            val prompt = """
-                Analyze the front image of this physical Pokémon card.
-                Identify the standard English card name, national Pokedex number, visible rarity,
-                expansion set name, and printed card number (including letters such as TG or SV).
-                If the set or card number is not readable, return an empty string for that field.
-                If identification is uncertain, return an empty name.
-                
-                Return ONLY a JSON object:
-                {
-                  "name": "Pokémon Name",
-                  "dex_number": 25,
-                  "rarity": "Rarity Tier",
-                  "set_name": "Expansion Name",
-                  "card_number": "123/198"
-                }
-            """.trimIndent()
-
-            val inputContent = content {
-                image(front)
-                text(prompt)
-            }
-
-            var delayMs = 4000L
-            for (attempt in 1..4) {
-                try {
-                    val response = generativeModel.generateContent(inputContent)
-                    val text = response.text?.trim() ?: throw Exception("Empty response from AI")
-
-                    val jsonStr = if (text.contains("```json")) {
-                        text.substringAfter("```json").substringBefore("```").trim()
-                    } else if (text.contains("```")) {
-                        text.substringAfter("```").substringBeforeLast("```").trim()
-                    } else {
-                        text
-                    }
-
-                    val json = JSONObject(jsonStr)
-                    val rName = json.getString("name").trim()
-                    if (rName.isEmpty() || rName.equals("Unknown", ignoreCase = true)) {
-                        throw Exception("Model $modelName returned Unknown name.")
-                    }
-                    require(json.getInt("dex_number") > 0 && json.getString("rarity").isNotBlank()) { "Incomplete identification" }
-                    return@withContext json
-                } catch (e: Exception) {
-                    val msgText = e.toString()
-                    if (msgText.contains("429") || msgText.contains("Too Many Requests", ignoreCase = true) || msgText.contains("quota", ignoreCase = true)) {
-                        if (attempt < 4) {
-                            onRetry(attempt, delayMs)
-                            delay(delayMs)
-                            delayMs += 4000L
-                            continue
-                        }
-                    }
-                    if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
-                        throw e
-                    }
-                    throw e
-                }
-            }
-        } catch (e: Exception) {
-            lastException = e
-            val msgText = e.toString()
-            if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
-                continue
-            } else {
-                throw e
-            }
+        Return ONLY a JSON object:
+        {
+          "name": "Pokémon Name",
+          "dex_number": 25,
+          "rarity": "Rarity Tier",
+          "set_name": "Expansion Name",
+          "card_number": "123/198"
         }
-    }
+    """.trimIndent()
 
-    throw lastException ?: Exception("Unknown error during Gemini processing")
+    val inputContent = content {
+        image(front)
+        text(prompt)
+    }
+    val text = retryAiQuota(onRetry) {
+        generativeModel.generateContent(inputContent).text?.trim()
+            ?: throw Exception("Empty response from AI")
+    }
+    val jsonStr = if (text.contains("```json")) {
+        text.substringAfter("```json").substringBefore("```").trim()
+    } else if (text.contains("```")) {
+        text.substringAfter("```").substringBeforeLast("```").trim()
+    } else {
+        text
+    }
+    val json = JSONObject(jsonStr)
+    val name = json.getString("name").trim()
+    if (name.isEmpty() || name.equals("Unknown", ignoreCase = true)) {
+        throw Exception("Model gemini-3.5-flash-lite returned Unknown name.")
+    }
+    require(json.getInt("dex_number") > 0 && json.getString("rarity").isNotBlank()) { "Incomplete identification" }
+    json
 }
 
 suspend fun gradeCardWithGemini(
@@ -583,72 +521,26 @@ suspend fun gradeCardWithGemini(
     back: Bitmap,
     onRetry: (attempt: Int, delayMs: Long) -> Unit = { _, _ -> }
 ): JSONObject = withContext(Dispatchers.IO) {
-    val apiKey = decryptKey(BuildConfig.ENC_GEMINI_API_KEY)
-    if (apiKey.isEmpty() || apiKey == "PLACEHOLDER_ENC_GEMINI_API_KEY") {
-        throw Exception("Gemini API Key missing or invalid.")
+    val generativeModel = FirebaseAiClient.model()
+    val inputContent = content {
+        image(front)
+        image(back)
+        text(CONDITION_ESTIMATE_PROMPT)
     }
-
-    val modelVariations = listOf("gemini-3.5-flash-lite")
-    var lastException: Exception? = null
-
-    for (modelName in modelVariations) {
-        try {
-            val generativeModel = GenerativeModel(
-                modelName = modelName,
-                apiKey = apiKey
-            )
-
-            val inputContent = content {
-                image(front)
-                image(back)
-                text(CONDITION_ESTIMATE_PROMPT)
-            }
-
-            var delayMs = 4000L
-            for (attempt in 1..4) {
-                try {
-                    val response = generativeModel.generateContent(inputContent)
-                    val text = response.text?.trim() ?: throw Exception("Empty response from AI")
-
-                    val jsonStr = if (text.contains("```json")) {
-                        text.substringAfter("```json").substringBefore("```").trim()
-                    } else if (text.contains("```")) {
-                        text.substringAfter("```").substringBeforeLast("```").trim()
-                    } else {
-                        text
-                    }
-
-                    val json = JSONObject(jsonStr)
-                    parseConditionEstimate(json)
-                    return@withContext json
-                } catch (e: Exception) {
-                    val msgText = e.toString()
-                    if (msgText.contains("429") || msgText.contains("Too Many Requests", ignoreCase = true) || msgText.contains("quota", ignoreCase = true)) {
-                        if (attempt < 4) {
-                            onRetry(attempt, delayMs)
-                            delay(delayMs)
-                            delayMs += 4000L
-                            continue
-                        }
-                    }
-                    if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
-                        throw e
-                    }
-                    throw e
-                }
-            }
-        } catch (e: Exception) {
-            lastException = e
-            val msgText = e.toString()
-            if (msgText.contains("404") || msgText.contains("not found", ignoreCase = true)) {
-                continue
-            } else {
-                throw e
-            }
-        }
+    val text = retryAiQuota(onRetry) {
+        generativeModel.generateContent(inputContent).text?.trim()
+            ?: throw Exception("Empty response from AI")
     }
-
-    throw lastException ?: Exception("Unknown error during Gemini processing")
+    val jsonStr = if (text.contains("```json")) {
+        text.substringAfter("```json").substringBefore("```").trim()
+    } else if (text.contains("```")) {
+        text.substringAfter("```").substringBeforeLast("```").trim()
+    } else {
+        text
+    }
+    val json = JSONObject(jsonStr)
+    parseConditionEstimate(json)
+    json
 }
 
 @Composable
@@ -693,6 +585,14 @@ fun CameraViewfinder(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (!FirebaseAiClient.isReady) {
+                    Text(
+                        "AI scanning is unavailable in this build. Use manual entry.",
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,

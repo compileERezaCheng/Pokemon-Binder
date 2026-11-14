@@ -46,14 +46,22 @@ SCRYDEX_API = "https://api.scrydex.com/pokemon/v1/en/cards"
 _scrydex_image_cache = {}
 PUBLIC_SETTINGS = {
     'rows', 'cols', 'mode', 'gsheet_enabled', 'gsheet_name', 'firebase_enabled',
-    'firebase_email', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
+    'firebase_email', 'firebase_user_id', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
     'cover_color', 'cover_featured_dex', 'cover_source', 'cover_image_url',
     'cover_image_path', 'profile_picture_source', 'profile_featured_dex',
     'profile_image_url', 'profile_image_path',
 }
 
 def public_settings(config):
-    return {key: config[key] for key in PUBLIC_SETTINGS if key in config}
+    settings = {key: config[key] for key in PUBLIC_SETTINGS if key in config}
+    settings["legacy_collection_available"] = config.get("legacy_collection_owner") == "ambiguous" and os.path.isfile(pokemon_binder.DATA_FILE)
+    return settings
+
+def collection_locked(handler):
+    def run(self, *args, **kwargs):
+        with pokemon_binder.COLLECTION_LOCK:
+            return handler(self, *args, **kwargs)
+    return run
 
 def valid_catalog_image_url(value):
     try:
@@ -214,6 +222,14 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return False
         return True
 
+    def current_account_request(self):
+        config = pokemon_binder.load_config()
+        current_uid = str(config.get("firebase_user_id") or "") if config.get("firebase_enabled") else ""
+        if self.headers.get("X-Expected-Firebase-UID", "") == current_uid:
+            return True
+        self.send_json({"success": False, "error": "The signed-in account changed. Reload the page before retrying."}, status=409)
+        return False
+
     def end_headers(self):
         # Call superclass end_headers directly. Caching headers are now managed on a per-response basis.
         super().end_headers()
@@ -224,6 +240,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
+        if path in {"/api/collection", "/api/suggest-position"} and not self.current_account_request():
+            return
 
         # Static files mapping
         if path == '/' or path == '/loading.html':
@@ -234,6 +252,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.serve_file(os.path.join(FRONTEND_DIR, 'index.css'), 'text/css; charset=utf-8', cache_age=0)
         elif path == '/index.js':
             self.serve_file(os.path.join(FRONTEND_DIR, 'index.js'), 'application/javascript; charset=utf-8', cache_age=0)
+        elif path == '/market.js':
+            self.serve_file(os.path.join(FRONTEND_DIR, 'market.js'), 'application/javascript; charset=utf-8', cache_age=0)
         elif path == '/cover_image.png':
             filepath = os.path.join(DATA_DIR, "cover_image.png")
             if os.path.exists(filepath):
@@ -287,6 +307,10 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": False, "error": f"Invalid JSON body: {str(e)}"}, status=400)
             return
 
+        if path in {"/api/settings", "/api/add", "/api/update-card", "/api/remove", "/api/sync",
+                    "/api/upload-profile-image", "/api/firebase/logout", "/api/firebase/import-legacy"} and not self.current_account_request():
+            return
+
         if path == '/api/settings':
             self.handle_save_settings(data)
         elif path == '/api/add':
@@ -308,6 +332,8 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.handle_firebase_login(data)
         elif path == '/api/firebase/logout':
             self.handle_firebase_logout()
+        elif path == '/api/firebase/import-legacy':
+            self.handle_firebase_import_legacy(data)
         elif path == '/api/shutdown':
             self.handle_shutdown()
         elif path == '/api/heartbeat':
@@ -492,6 +518,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_json({"success": False, "error": f"Failed to save image: {str(e)}"}, status=500)
 
+    @collection_locked
     def handle_firebase_login(self, data):
         email = data.get("email")
         password = data.get("password")
@@ -517,11 +544,30 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"success": False, "error": msg}, status=401)
 
+    @collection_locked
     def handle_firebase_logout(self):
         config = pokemon_binder.load_config()
         success, msg = pokemon_binder.firebase_logout(config)
-        self.send_json({"success": success, "message": msg})
+        self.send_json({"success": success, "message": msg, "config": public_settings(pokemon_binder.load_config())})
 
+    @collection_locked
+    def handle_firebase_import_legacy(self, data):
+        if data.get("confirm") is not True:
+            self.send_json({"success": False, "error": "Explicit confirmation is required to import the legacy collection."}, status=400)
+            return
+        config = pokemon_binder.load_config()
+        if not config.get("firebase_enabled") or not config.get("firebase_user_id") or not config.get("firebase_id_token"):
+            self.send_json({"success": False, "error": "Sign in to a Firebase account before importing local cards."}, status=401)
+            return
+        success, message = pokemon_binder.import_ambiguous_legacy_collection(config)
+        if not success:
+            self.send_json({"success": False, "error": message}, status=409)
+            return
+        sync_success, sync_message = pokemon_binder.sync_with_firebase(config, pokemon_binder.load_collection(config["firebase_user_id"]))
+        self.send_json({"success": True, "message": message, "sync_success": sync_success, "sync_message": sync_message,
+                        "config": public_settings(pokemon_binder.load_config())})
+
+    @collection_locked
     def handle_add_card(self, data):
         # Validate data
         name = data.get("name", "").strip().lower()
@@ -636,6 +682,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"success": False, "error": "Could not write card to local CSV database"}, status=500)
 
+    @collection_locked
     def handle_update_card(self, data):
         collection = pokemon_binder.load_collection()
         copy_id = str(data.get("copy_id") or "").strip()
@@ -742,6 +789,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"success": False, "error": "Could not update card in local CSV database"}, status=500)
 
+    @collection_locked
     def handle_remove_card(self, data):
         # We need to know which card to remove.
         # Removing by page, slot, name, and optionally date_added makes it specific.
@@ -808,6 +856,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"success": False, "error": "Failed to update CSV database"}, status=500)
 
+    @collection_locked
     def handle_sync_gspread(self):
         config = pokemon_binder.load_config()
         gsheet_active = config.get("gsheet_enabled", False)

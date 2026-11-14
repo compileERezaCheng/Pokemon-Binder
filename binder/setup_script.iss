@@ -20,16 +20,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 
 [Files]
-; Install the server that stays in the tray and opens the binder in the browser.
 Source: "dist\PokemonBinderServer\*"; DestDir: "{app}\PokemonBinderServer"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "data\pokeball.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 Type: files; Name: "{autodesktop}\Pokemon Binder Manager.lnk"
 
 [Icons]
-Name: "{group}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; IconFilename: "{app}\pokeball.ico"
-Name: "{autodesktop}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; IconFilename: "{app}\pokeball.ico"
+Name: "{group}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"
+Name: "{autodesktop}\Pokemon Binder Manager"; Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"
 
 [Run]
 Filename: "{app}\PokemonBinderServer\PokemonBinderServer.exe"; Description: "{cm:LaunchProgram,Pokemon Binder Manager}"; Flags: nowait postinstall skipifsilent

@@ -76,15 +76,15 @@ class CardArtworkTest {
         compose.setContent {
             MaterialTheme { CardDetailsArtwork(card.copy(imageUrl = "https://assets.tcgdex.net/en/base/base1/logo.png")) }
         }
-        awaitImage("Charizard Pokémon")
-        compose.onNodeWithContentDescription("Charizard Pokémon").assertHasNoClickAction()
+        compose.onNodeWithText("Image unavailable").assertHasNoClickAction()
+        compose.onNodeWithContentDescription("Close image").assertDoesNotExist()
     }
 
     @Test fun failedCardArtworkShowsANonClickablePlaceholder() {
         compose.setContent {
             MaterialTheme { CardDetailsArtwork(card.copy(imageUrl = "https://assets.tcgdex.net/en/base/base1/missing/low.webp")) }
         }
-        compose.onNodeWithText("Image unavailable").assertHasNoClickAction()
+        compose.onNodeWithText("Imagem indisponível").assertHasNoClickAction()
         compose.onNodeWithContentDescription("Charizard card").assertDoesNotExist()
         compose.onNodeWithContentDescription("Close image").assertDoesNotExist()
     }

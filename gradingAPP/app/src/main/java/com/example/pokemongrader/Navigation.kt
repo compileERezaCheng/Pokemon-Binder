@@ -41,13 +41,13 @@ fun MainNavigation(repository: DataRepository) {
         entry<Main> {
           MainScreen(
             repository = repository,
-            onNavigateToScan = { backStack.add(Scan) },
-            onNavigateToCardDetails = { page, slot, date, copyId -> backStack.add(CardDetails(page, slot, date, copyId)) },
-            onNavigateToAccountSettings = { backStack.add(AccountSettings) },
+            onNavigateToScan = { if (backStack.lastOrNull() == Main) backStack.add(Scan) },
+            onNavigateToCardDetails = { page, slot, date, copyId -> if (backStack.lastOrNull() == Main) backStack.add(CardDetails(page, slot, date, copyId)) },
+            onNavigateToAccountSettings = { if (backStack.lastOrNull() == Main) backStack.add(AccountSettings) },
             activeTab = activeTab.value,
             onActiveTabChange = { activeTab.value = it },
             currentPage = currentPage.intValue,
-            onCurrentPageChange = { currentPage.intValue = it },
+            onCurrentPageChange = { currentPage.intValue = it.coerceAtLeast(1) },
             modifier = Modifier.safeDrawingPadding()
           )
         }

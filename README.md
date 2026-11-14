@@ -2,7 +2,7 @@
 
 A dual-platform virtual Pokemon card ecosystem to manage, sync, and showcase your collection!
 
-This project consists of a **glassmorphic PC Web Application** and a **native Android Companion App**. Both platforms synchronize collections via **Firebase**, featuring realistic double-page spreads, AI-powered card scanning, and customizable trainer profiles. The PC app pulls updates when opened or refreshed, subject to a five-minute sync cooldown.
+This project consists of a **glassmorphic PC Web Application** and a **native Android Companion App**. Both platforms can synchronize collections via **Firebase** and have customizable trainer profiles. The PC app also pulls updates when opened or refreshed, subject to a five-minute auto-sync cooldown. Use **Sync** to update the binder and collection list without refreshing the page.
 
 ---
 
@@ -77,14 +77,16 @@ The legacy **`Poke_Binder_mobile.apk`** in the project root is older and does no
 
 ### Windows executable and installer
 
-From the repository root, install the build dependencies and rebuild the executable:
+From the repository root, install the Python build dependencies and rebuild both Windows executables:
 
 ```powershell
 python -m pip install pyinstaller gspread google-auth
+$env:POKEBINDER_FIREBASE_API_KEY = '<Firebase client API key>'
+$env:POKEBINDER_FIREBASE_DB_URL = '<Realtime Database HTTPS URL>'
 .\binder\build.ps1
 ```
 
-The executable is generated at `binder/dist/PokemonBinderServer/PokemonBinderServer.exe`. To create the installer, open **`binder/setup_script.iss`** in **Inno Setup** and compile it. The installer is generated at `binder/Pokemon_Binder_Setup.exe`.
+The desktop app and its local server are generated in `binder/dist/`. The installer starts the local server and opens the binder in the default browser. Compile **`binder/setup_script.iss`** in **Inno Setup** to generate `binder/Pokemon_Binder_Setup.exe`.
 
 Always rebuild the executable before compiling the installer so that the package includes the latest frontend and backend changes.
 
@@ -102,7 +104,31 @@ The release build currently has no production signing configuration: `assembleRe
 
 Keep local configuration such as `gradingAPP/secrets.properties`, signing keystores, passwords, and API credentials out of commits. Attach distributable APKs and installers to **GitHub Releases** rather than committing generated binaries.
 
-### Automated checks
+### Firebase sync and optional AI scanner
+
+Use a separate Firebase project for a test collection. Enable **Email/Password** sign-in, create a **Realtime Database** in locked mode, and apply [`database.rules.json`](database.rules.json) to that project. The rules isolate each account and make the legacy collection path read-only. Upgrade both clients before applying these rules to a project used by older versions, and back up existing collections first.
+
+For Android, set `ENC_FIREBASE_API_KEY` and `ENC_FIREBASE_DB_URL` in the local `gradingAPP/secrets.properties` using the project's existing `binder/backend/obfuscator.py` helper. Use the same Firebase project on Windows and Android. Login, sync, Market Prices, and manual card entry work without the Gemini scanner.
+
+To enable the optional scanner, configure [Firebase AI Logic with App Check](https://firebase.google.com/docs/ai-logic/app-check), add `FIREBASE_APP_ID` and `FIREBASE_PROJECT_ID` locally, and check the provider's billing requirements and regional terms. Never embed a Gemini API key in the app.
+
+### Market Prices (PC and Android)
+
+Open **Market Prices** in the PC sidebar or the Android bottom bar. Search a card name, filter by set and collector number, and explicitly select a printing. Older collection entries can be identified here without modifying the saved card. The bottom bar is **Binder | Collection/Search | + | Market Prices | avatar**; the central action clears slot prefill, while an empty binder slot preserves it. Tap the centred page indicator marked **Sync** to refresh the binder.
+
+On PC, results show artwork, set/number and a price preview before selection. The set dropdown lists the editions found for the current name. Prices are checked for **12 displayed editions at a time**, with at most **three concurrent requests**; **Show more editions** loads another batch. Selecting a result opens the adjacent price panel, with a finish/currency/source selector, one primary quote (EUR preferred) and the other metrics underneath. On narrow screens, selection scrolls to that panel. A missing quote and a failed request have distinct messages; refresh/retry controls appear only when useful. Refreshing a selected price bypasses its normal cache TTL while preserving rate-limit cooldowns.
+
+Prices come directly from the existing **TCGdex English catalog**, independently on each platform: no additional key, service, PC connection or currency conversion is required. The [official pricing guide](https://tcgdex.dev/markets-prices) and [card schema](https://tcgdex.dev/reference/card) describe Cardmarket EUR averages/trends/lows and TCGplayer USD market/median/low values. Each reference displays its own type, finish, currency, provider and source timestamp; missing timestamps are labelled **Consulted**. Missing prices are unavailable, never zero-filled. English identifies the catalog language; marketplace language and condition are **unspecified**, and references are for **uncertified** cards, independent of the AI grade.
+
+Detailed variant pricing is used when supplied. If a marketplace has no usable variant quote, its root-level price remains visible separately as an **Edition reference**, with **finish unconfirmed**; it is never assigned to a named detailed variant. Zero/non-positive values are treated as absent quotes. Cardmarket's foil group does not identify an exact holo/reverse finish; it is labelled **finish unspecified**. Select the matching printing and finish before interpreting any reference. No Scrydex/image-match IDs or Pokédex numbers are used for prices. The [TCGdex FAQ](https://tcgdex.dev/faq) acknowledges imperfect marketplace mappings; these are reference prices, not a condition-specific appraisal or guaranteed sale value.
+
+The in-memory cache lasts **one hour**, holds at most **128 complete responses** per platform, and includes the full identity (English endpoint + catalog card ID) and **all** supplied variants, currencies and conditions in each cached response. Search responses include their query in the key. Identical concurrent requests are reused (Android serializes cache access); prices are never persisted to the collection or Firebase. Failed refreshes keep previous responses with an **Outdated cached** label. Search uses **350 ms debounce** and invalidates previous requests immediately. Timeouts are 10 seconds on PC and 5 seconds each for Android connection/read; HTTP 429 triggers a provider cooldown using numeric `Retry-After`, or 60 seconds if absent. Retry remains available after errors. The cache resets when the browser/app process closes.
+
+TCGdex needs [no authentication and publishes no hard rate limit](https://tcgdex.dev/faq); caching is recommended. Scrydex was evaluated: its [prices](https://scrydex.com/docs/getting-started/prices) include condition-specific `market`/`low` references in USD/JPY (`include=prices`), while EUR coverage is still planned. Its current [authentication](https://scrydex.com/docs/getting-started/authentication) and [rate limits](https://scrydex.com/docs/getting-started/rate-limits) require private credentials/plan quotas (100 requests/second), so it is not used for this feature. Provider names remain visible; dataset licence attribution is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Artwork and marketplace trademarks remain with their respective owners.
+
+Android supports portrait and landscape. The binder fits all nine slots without vertical scrolling; collection, prices and details retain scrolling. The first binder page has no previous-page control.
+
+### Running automated checks
 
 Run the PC checks from the repository root:
 

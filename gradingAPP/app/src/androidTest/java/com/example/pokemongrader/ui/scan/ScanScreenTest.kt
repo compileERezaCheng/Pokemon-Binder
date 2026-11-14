@@ -21,14 +21,16 @@ class ScanScreenTest {
         val gradeChanges = AtomicInteger()
         showConfirmation(isManual = false, back = bitmap, onGradeChange = { gradeChanges.incrementAndGet() })
 
-        composeTestRule.onNodeWithText("GRADE THIS CARD WITH AI (BETA)").assertExists()
+        composeTestRule.onNodeWithText("ESTIMATE CONDITION (BETA)").assertExists()
         assertEquals(0, gradeChanges.get())
     }
 
     @Test
-    fun aiGradingButtonRequiresBothSides() {
-        showConfirmation(isManual = false, back = null)
-        composeTestRule.onNodeWithText("GRADE THIS CARD WITH AI (BETA)").assertDoesNotExist()
+    fun conditionEstimateDoesNotRunWithoutBothSides() {
+        val gradeChanges = AtomicInteger()
+        showConfirmation(isManual = false, back = null, onGradeChange = { gradeChanges.incrementAndGet() })
+        composeTestRule.onNodeWithText("ESTIMATE CONDITION (BETA)").performClick()
+        assertEquals(0, gradeChanges.get())
     }
 
     @Test
@@ -36,7 +38,7 @@ class ScanScreenTest {
         val confirmed = AtomicInteger()
         showConfirmation(isManual = true, back = null, onConfirm = { confirmed.incrementAndGet() })
 
-        composeTestRule.onNodeWithText("GRADE THIS CARD WITH AI (BETA)").assertDoesNotExist()
+        composeTestRule.onNodeWithText("ESTIMATE CONDITION (BETA)").assertDoesNotExist()
         composeTestRule.onNodeWithText("COMMIT TO BINDER").performClick()
         assertEquals(1, confirmed.get())
     }

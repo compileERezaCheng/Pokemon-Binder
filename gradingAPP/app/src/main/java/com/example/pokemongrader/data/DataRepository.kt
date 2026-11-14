@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 interface DataRepository {
     val isLoggedIn: StateFlow<Boolean>
@@ -40,6 +41,7 @@ interface DataRepository {
 class DefaultDataRepository(private val context: Context) : DataRepository {
     private val prefs: SharedPreferences = context.getSharedPreferences("PokeGraderPrefs", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(Dispatchers.Main)
+    private var sessionRevision = 0L
 
     private val _isLoggedIn = MutableStateFlow(false)
     override val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
@@ -81,12 +83,8 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         set(value) { _prefilledSlot = value }
 
     init {
-        _username.value = prefs.getString("username", "Trainer") ?: "Trainer"
-        _profilePicSource.value = prefs.getString("profile_pic_source", "pokemon") ?: "pokemon"
-        _profileFeaturedDex.value = prefs.getInt("profile_featured_dex", 25)
-        _profileImageUrl.value = prefs.getString("profile_image_url", "") ?: ""
-        _profileImageBase64.value = prefs.getString("profile_image_base64", "") ?: ""
-
+        val uid = prefs.getString("uid", "") ?: ""
+        if (uid.isNotEmpty()) loadCachedProfile(uid)
         val refreshToken = prefs.getString("refresh_token", "")
         if (!refreshToken.isNullOrEmpty()) {
             _isLoggedIn.value = true
@@ -95,168 +93,251 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         }
     }
 
+    private fun isCurrentSession(revision: Long, uid: String): Boolean =
+        revision == sessionRevision && prefs.getString("uid", "") == uid
+
+    private fun profileKey(uid: String, field: String) = "profile:$uid:$field"
+
+    private fun clearVisibleAccount() {
+        _isLoggedIn.value = false
+        _cards.value = emptyList()
+        _isLoading.value = false
+        _username.value = "Trainer"
+        _profilePicSource.value = "pokemon"
+        _profileFeaturedDex.value = 25
+        _profileImageUrl.value = ""
+        _profileImageBase64.value = ""
+        _errorMessage.value = null
+    }
+
+    private fun loadCachedProfile(uid: String) {
+        _username.value = prefs.getString(profileKey(uid, "username"), "Trainer") ?: "Trainer"
+        _profilePicSource.value = prefs.getString(profileKey(uid, "profile_pic_source"), "pokemon") ?: "pokemon"
+        _profileFeaturedDex.value = prefs.getInt(profileKey(uid, "profile_featured_dex"), 25)
+        _profileImageUrl.value = prefs.getString(profileKey(uid, "profile_image_url"), "") ?: ""
+        _profileImageBase64.value = prefs.getString(profileKey(uid, "profile_image_base64"), "") ?: ""
+    }
+
+    private fun cacheProfile(uid: String, username: String, source: String, dex: Int, url: String, base64: String) {
+        prefs.edit()
+            .putString(profileKey(uid, "username"), username)
+            .putString(profileKey(uid, "profile_pic_source"), source)
+            .putInt(profileKey(uid, "profile_featured_dex"), dex)
+            .putString(profileKey(uid, "profile_image_url"), url)
+            .putString(profileKey(uid, "profile_image_base64"), base64)
+            .apply()
+    }
+
+    private fun beginSignIn(): Long {
+        val revision = ++sessionRevision
+        prefs.edit().remove("uid").remove("token").remove("refresh_token").apply()
+        clearVisibleAccount()
+        _isLoading.value = true
+        return revision
+    }
+
+    private fun pendingAddKey(uid: String, card: Card) = "pending_add:$uid:${card.page}:${card.slot}"
+
+    private fun preserveConflict(uid: String, conflict: CardSyncConflictException) {
+        val record = JSONObject()
+            .put("reason", conflict.message)
+            .put("base", conflict.base?.toJsonObject() ?: JSONObject.NULL)
+            .put("local", conflict.local?.toJsonObject() ?: JSONObject.NULL)
+            .put("remote", conflict.remote?.toJsonObject() ?: JSONObject.NULL)
+        prefs.edit().putString("sync_conflict:$uid:${conflict.copyId}", record.toString()).apply()
+        _errorMessage.value = conflict.message
+    }
+
     /**
      * Silently exchanges the stored refreshToken for a fresh idToken, then fetches
      * the remote collection. Falls back to stored idToken if refresh fails.
      */
     override suspend fun refreshAndFetch(): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
         _isLoading.value = true
         return try {
             val storedRefreshToken = prefs.getString("refresh_token", "") ?: ""
+            var token = prefs.getString("token", "") ?: ""
             if (storedRefreshToken.isNotEmpty()) {
                 val newIdToken = FirebaseClient.refreshIdToken(storedRefreshToken)
                 if (newIdToken != null) {
+                    if (!isCurrentSession(revision, uid)) return false
                     prefs.edit().putString("token", newIdToken).apply()
+                    token = newIdToken
                 }
             }
-            fetchRemote()
+            if (!isCurrentSession(revision, uid)) return false
+            fetchRemoteFor(revision, uid, token)
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun login(email: String, password: String): Boolean {
-        _isLoading.value = true
+        val revision = beginSignIn()
         return try {
             val result = FirebaseClient.signIn(email, password)
+            if (revision != sessionRevision) return false
             prefs.edit()
                 .putString("token", result.idToken)
                 .putString("uid", result.uid)
                 .putString("refresh_token", result.refreshToken)
                 .apply()
             _isLoggedIn.value = true
-            fetchRemote()
-            true
+            loadCachedProfile(result.uid)
+            fetchRemoteFor(revision, result.uid, result.idToken)
+            isCurrentSession(revision, result.uid)
         } catch (e: Exception) {
-            _errorMessage.value = e.message
+            if (revision == sessionRevision) _errorMessage.value = e.message ?: "Could not refresh the session."
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun register(email: String, password: String): Boolean {
-        _isLoading.value = true
+        val revision = beginSignIn()
         return try {
             val result = FirebaseClient.signUp(email, password)
+            if (revision != sessionRevision) return false
             prefs.edit()
                 .putString("token", result.idToken)
                 .putString("uid", result.uid)
                 .putString("refresh_token", result.refreshToken)
                 .apply()
             _isLoggedIn.value = true
-            fetchRemote()
-            true
+            loadCachedProfile(result.uid)
+            fetchRemoteFor(revision, result.uid, result.idToken)
+            isCurrentSession(revision, result.uid)
         } catch (e: Exception) {
-            _errorMessage.value = e.message
+            if (revision == sessionRevision) _errorMessage.value = e.message
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun addCard(card: Card): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
+        val token = prefs.getString("token", "") ?: ""
+        if (uid.isBlank() || token.isBlank()) return false
         _isLoading.value = true
         return try {
-            val uid = prefs.getString("uid", "") ?: ""
-            val token = prefs.getString("token", "") ?: ""
+            val key = pendingAddKey(uid, card)
+            val copyId = prefs.getString(key, null) ?: card.copyId.also { prefs.edit().putString(key, it).apply() }
+            val requested = card.copy(copyId = copyId)
+            val saved = FirebaseClient.writeCopy(uid, token, base = null, local = requested) ?: return false
+            if (!isCurrentSession(revision, uid)) return false
             val current = _cards.value.toMutableList()
-            current.add(card)
-            FirebaseClient.saveCollection(uid, token, current)
+            current.removeAll { it.copyId == saved.copyId }
+            current.add(saved)
             _cards.value = current
+            prefs.edit().remove(key).apply()
             true
         } catch (e: Exception) {
+            if (revision == sessionRevision) {
+                if (e is CardSyncConflictException) preserveConflict(uid, e) else _errorMessage.value = e.message
+            }
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun updateCard(card: Card): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
+        val token = prefs.getString("token", "") ?: ""
+        if (uid.isBlank() || token.isBlank()) return false
         _isLoading.value = true
         return try {
-            val uid = prefs.getString("uid", "") ?: ""
-            val token = prefs.getString("token", "") ?: ""
-            val current = _cards.value.toMutableList()
-            val index = current.indexOfFirst { it.copyId == card.copyId }
-            if (index < 0) return false
-            current[index] = card
-            FirebaseClient.saveCollection(uid, token, current)
-            _cards.value = current
+            val base = _cards.value.firstOrNull { it.copyId == card.copyId } ?: return false
+            val saved = FirebaseClient.writeCopy(uid, token, base = base, local = card) ?: return false
+            if (!isCurrentSession(revision, uid)) return false
+            _cards.value = _cards.value.map { if (it.copyId == saved.copyId) saved else it }
             true
         } catch (e: Exception) {
-            _errorMessage.value = e.message
+            if (revision == sessionRevision) {
+                if (e is CardSyncConflictException) preserveConflict(uid, e) else _errorMessage.value = e.message
+            }
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun removeCard(card: Card): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
+        val token = prefs.getString("token", "") ?: ""
+        if (uid.isBlank() || token.isBlank()) return false
         _isLoading.value = true
         return try {
-            val uid = prefs.getString("uid", "") ?: ""
-            val token = prefs.getString("token", "") ?: ""
-            val current = _cards.value.toMutableList()
-            val iterator = current.iterator()
-            while (iterator.hasNext()) {
-                val c = iterator.next()
-                if (c.copyId == card.copyId || (card.copyId.isBlank() && c.page == card.page && c.slot == card.slot && c.name.equals(card.name, ignoreCase = true) && c.type == card.type && c.condition == card.condition)) {
-                    iterator.remove()
-                    break
-                }
-            }
-            FirebaseClient.saveCollection(uid, token, current)
-            _cards.value = current
+            val base = _cards.value.firstOrNull { it.copyId == card.copyId }
+                ?: _cards.value.firstOrNull { card.copyId.isBlank() && it.page == card.page && it.slot == card.slot && it.name.equals(card.name, ignoreCase = true) }
+                ?: return false
+            FirebaseClient.writeCopy(uid, token, base = base, local = null, delete = true)
+            if (!isCurrentSession(revision, uid)) return false
+            _cards.value = _cards.value.filterNot { it.copyId == base.copyId }
             true
         } catch (e: Exception) {
+            if (revision == sessionRevision) {
+                if (e is CardSyncConflictException) preserveConflict(uid, e) else _errorMessage.value = e.message
+            }
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override suspend fun fetchRemote(): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
+        val token = prefs.getString("token", "") ?: ""
+        if (uid.isBlank() || token.isBlank()) return false
         _isLoading.value = true
         return try {
-            val uid = prefs.getString("uid", "") ?: ""
-            val token = prefs.getString("token", "") ?: ""
-            _cards.value = FirebaseClient.fetchCollection(uid, token)
-
-            val profile = FirebaseClient.fetchProfile(uid, token)
-            if (profile != null) {
-                val uname = profile.optString("username", "Trainer")
-                val source = profile.optString("profile_picture_source", "pokemon")
-                val dex = profile.optInt("profile_featured_dex", 25)
-                val urlImg = profile.optString("profile_image_url", "")
-                val base64Img = profile.optString("profile_image_base64", "")
-                
-                _username.value = uname
-                _profilePicSource.value = source
-                _profileFeaturedDex.value = dex
-                _profileImageUrl.value = urlImg
-                _profileImageBase64.value = base64Img
-                
-                prefs.edit()
-                    .putString("username", uname)
-                    .putString("profile_pic_source", source)
-                    .putInt("profile_featured_dex", dex)
-                    .putString("profile_image_url", urlImg)
-                    .putString("profile_image_base64", base64Img)
-                    .apply()
-            } else {
-                val uName = FirebaseClient.fetchUsername(uid, token)
-                if (uName != null) {
-                    _username.value = uName
-                    prefs.edit().putString("username", uName).apply()
-                }
-            }
-            true
+            fetchRemoteFor(revision, uid, token)
         } catch (e: Exception) {
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
+    }
+
+    private suspend fun fetchRemoteFor(revision: Long, uid: String, token: String): Boolean = try {
+        val remoteCards = FirebaseClient.fetchCollection(uid, token)
+        if (!isCurrentSession(revision, uid)) return false
+        _cards.value = remoteCards
+
+        val profile = FirebaseClient.fetchProfile(uid, token)
+        if (!isCurrentSession(revision, uid)) return false
+        if (profile != null) {
+            val username = profile.optString("username", "Trainer")
+            val source = profile.optString("profile_picture_source", "pokemon")
+            val dex = profile.optInt("profile_featured_dex", 25)
+            val url = profile.optString("profile_image_url", "")
+            val base64 = profile.optString("profile_image_base64", "")
+            _username.value = username
+            _profilePicSource.value = source
+            _profileFeaturedDex.value = dex
+            _profileImageUrl.value = url
+            _profileImageBase64.value = base64
+            cacheProfile(uid, username, source, dex, url, base64)
+        } else {
+            val username = FirebaseClient.fetchUsername(uid, token)
+            if (!isCurrentSession(revision, uid)) return false
+            if (username != null) {
+                _username.value = username
+                cacheProfile(uid, username, _profilePicSource.value, _profileFeaturedDex.value, _profileImageUrl.value, _profileImageBase64.value)
+            }
+        }
+        true
+    } catch (e: Exception) {
+        if (isCurrentSession(revision, uid)) _errorMessage.value = e.message ?: "Could not sync collection."
+        false
     }
 
     override suspend fun updateProfile(
@@ -266,12 +347,13 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         url: String,
         base64: String
     ): Boolean {
+        val revision = sessionRevision
+        val uid = prefs.getString("uid", "") ?: ""
+        val token = prefs.getString("token", "") ?: ""
         _isLoading.value = true
         return try {
-            val uid = prefs.getString("uid", "") ?: ""
-            val token = prefs.getString("token", "") ?: ""
-            
             FirebaseClient.saveProfile(uid, token, username, source, dex, url, base64)
+            if (!isCurrentSession(revision, uid)) return false
             
             _username.value = username
             _profilePicSource.value = source
@@ -279,31 +361,20 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
             _profileImageUrl.value = url
             _profileImageBase64.value = base64
             
-            prefs.edit()
-                .putString("username", username)
-                .putString("profile_pic_source", source)
-                .putInt("profile_featured_dex", dex)
-                .putString("profile_image_url", url)
-                .putString("profile_image_base64", base64)
-                .apply()
+            cacheProfile(uid, username, source, dex, url, base64)
             true
         } catch (e: Exception) {
-            _errorMessage.value = e.message
+            if (revision == sessionRevision) _errorMessage.value = e.message
             false
         } finally {
-            _isLoading.value = false
+            if (revision == sessionRevision) _isLoading.value = false
         }
     }
 
     override fun logout() {
-        prefs.edit().clear().apply()
-        _isLoggedIn.value = false
-        _cards.value = emptyList()
-        _username.value = "Trainer"
-        _profilePicSource.value = "pokemon"
-        _profileFeaturedDex.value = 25
-        _profileImageUrl.value = ""
-        _profileImageBase64.value = ""
+        sessionRevision++
+        prefs.edit().remove("uid").remove("token").remove("refresh_token").apply()
+        clearVisibleAccount()
     }
 
 }

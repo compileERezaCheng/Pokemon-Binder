@@ -98,6 +98,17 @@ class LocalServerTest(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/firebase/logout')[0], 200)
         self.assertEqual(self.request('POST', '/api/shutdown')[0], 200)
 
+    def test_market_script_is_served(self):
+        source = Path(__file__).resolve().parents[1] / 'frontend'
+        previous = self.module.FRONTEND_DIR
+        self.module.FRONTEND_DIR = str(source)
+        try:
+            status, content = self.request('GET', '/market.js')
+            self.assertEqual(status, 200)
+            self.assertIn(b'class MarketClient', content)
+        finally:
+            self.module.FRONTEND_DIR = previous
+
 
 if __name__ == '__main__':
     unittest.main()

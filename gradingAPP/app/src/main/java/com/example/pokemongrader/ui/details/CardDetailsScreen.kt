@@ -89,6 +89,7 @@ fun CardDetailsScreen(
                 modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                if (saveMessage.isNotBlank()) Text(saveMessage, color = Color(0xFFCBD5E1), fontSize = 13.sp)
                 CardDetailsArtwork(
                     card, modifier = Modifier.fillMaxWidth(0.8f),
                     onImageFailure = {
@@ -151,14 +152,12 @@ fun CardDetailsScreen(
                                     )
                                     val saved = repository.updateCard(updated)
                                     isSavingSet = false
-                                    saveMessage = if (saved) "Set saved." else "Could not save the set. Retry."
+                                    saveMessage = if (saved) "Set saved." else repository.errorMessage.value ?: "Could not save the set. Retry."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
                         ) { Text(if (isSavingSet) "Saving..." else "Save set") }
                     }
-                    if (saveMessage.isNotBlank()) Text(saveMessage, color = Color(0xFFCBD5E1), fontSize = 13.sp)
-
                     if (card.notes.isNotBlank()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Notes", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -180,8 +179,11 @@ fun CardDetailsScreen(
                     onClick = {
                         card?.let {
                             coroutineScope.launch {
-                                repository.removeCard(it)
-                                onNavigateBack()
+                                if (repository.removeCard(it)) onNavigateBack()
+                                else {
+                                    showDeleteConfirm = false
+                                    saveMessage = repository.errorMessage.value ?: "Could not remove the card. Retry."
+                                }
                             }
                         }
                     },

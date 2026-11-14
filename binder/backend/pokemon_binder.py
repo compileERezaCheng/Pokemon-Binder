@@ -2,10 +2,13 @@ import os
 import sys
 import csv
 import json
+import hashlib
+import threading
 import urllib.request
 import urllib.error
 import urllib.parse
 import shutil
+import uuid
 from datetime import datetime
 
 # Import secrets with fallback
@@ -47,6 +50,23 @@ def get_resource_path(relative_path):
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     return os.path.join(base_path, relative_path)
 
+def load_firebase_client_config():
+    try:
+        with open(get_resource_path(os.path.join("data", "firebase_client_config.json")), "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, ValueError):
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    return {
+        "apiKey": config.get("apiKey") or os.environ.get("POKEBINDER_FIREBASE_API_KEY", ""),
+        "databaseURL": config.get("databaseURL") or os.environ.get("POKEBINDER_FIREBASE_DB_URL", ""),
+    }
+
+FIREBASE_CLIENT_CONFIG = load_firebase_client_config()
+FIREBASE_API_KEY = FIREBASE_CLIENT_CONFIG["apiKey"] or FIREBASE_API_KEY
+FIREBASE_DB_URL = FIREBASE_CLIENT_CONFIG["databaseURL"] or FIREBASE_DB_URL
+
 # Configuration constants
 # For data persistence, we want data/ to be in %APPDATA% so it's writable 
 # even when the app is installed in Program Files.
@@ -63,22 +83,112 @@ DATA_FILE = os.path.join(DATA_DIR, "pokemon_binder.csv")
 CACHE_FILE = os.path.join(DATA_DIR, "pokemon_cache.json")
 SYNC_STATE_FILE = os.path.join(DATA_DIR, "sync_state.json")
 POKEMON_SPECIES_URL = "https://pokeapi.co/api/v2/pokemon-species/?limit=1000"
+COLLECTION_LOCK = threading.RLock()
+PROFILE_FIELDS = ("username", "profile_picture_source", "profile_featured_dex", "profile_image_url", "profile_image_path")
 # shortcut: fixed at the current 1025 species; raise when the National Dex grows.
 NATIONAL_DEX_SIZE = 1025
 
-def load_sync_state():
-    if os.path.exists(SYNC_STATE_FILE):
+def account_data_path(user_id):
+    account_hash = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()
+    return os.path.join(DATA_DIR, "accounts", account_hash)
+
+def _active_user_id(config=None):
+    config = config if config is not None else load_config()
+    user_id = str(config.get("firebase_user_id") or "").strip()
+    return user_id if config.get("firebase_enabled") and user_id else ""
+
+def _user_file(filename, user_id=None):
+    if user_id is None:
+        user_id = _active_user_id()
+    if not user_id:
+        return DATA_FILE if filename == "pokemon_binder.csv" else SYNC_STATE_FILE if filename == "sync_state.json" else os.path.join(DATA_DIR, filename)
+    return os.path.join(account_data_path(user_id), filename)
+
+def _profile_file(user_id=None):
+    return _user_file("profile.json", user_id)
+
+def local_profile_image_path(user_id=None):
+    if user_id is None:
+        user_id = _active_user_id()
+    directory = account_data_path(user_id) if user_id else DATA_DIR
+    return os.path.join(directory, "profile_image.png")
+
+def _load_profile(user_id=None):
+    try:
+        with open(_profile_file(user_id), "r", encoding="utf-8") as f:
+            profile = json.load(f)
+        return profile if isinstance(profile, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def _save_profile(config, user_id=None):
+    if user_id is None:
+        user_id = _active_user_id(config)
+    path = _profile_file(user_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    values = {key: config.get(key, DEFAULT_CONFIG.get(key, "")) for key in PROFILE_FIELDS}
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(values, f, ensure_ascii=False, indent=2)
+    os.replace(temporary, path)
+
+def _migrate_legacy_user_data(config):
+    user_id = _active_user_id(config)
+    if not user_id or config.get("legacy_collection_owner") != user_id:
+        return
+    account_dir = account_data_path(user_id)
+    os.makedirs(account_dir, exist_ok=True)
+    for old_path, filename in ((DATA_FILE, "pokemon_binder.csv"), (SYNC_STATE_FILE, "sync_state.json")):
+        target = os.path.join(account_dir, filename)
+        if os.path.isfile(old_path) and not os.path.exists(target):
+            backup = target + ".pre-account-migration.bak"
+            if not os.path.exists(backup):
+                shutil.copy2(old_path, backup)
+            os.replace(old_path, target)
+    config["legacy_collection_owner"] = "migrated:" + user_id
+    save_config(config)
+
+def import_ambiguous_legacy_collection(config):
+    user_id = _active_user_id(config)
+    if not user_id or config.get("firebase_auth_method") != "auth" or not config.get("firebase_id_token"):
+        return False, "Sign in to a Firebase account before importing local cards."
+    if config.get("legacy_collection_owner") != "ambiguous" or not os.path.isfile(DATA_FILE):
+        return False, "No unassigned legacy collection is available to import."
+    with COLLECTION_LOCK:
+        backup = DATA_FILE + ".pre-explicit-import.bak"
         try:
-            with open(SYNC_STATE_FILE, "r", encoding="utf-8") as f:
+            if not os.path.exists(backup):
+                shutil.copy2(DATA_FILE, backup)
+            legacy = _load_collection_file(DATA_FILE, user_id="")
+            current = load_collection(user_id)
+            known = {str(card.get("Copy ID")) for card in current}
+            additions = [card for card in legacy if str(card.get("Copy ID")) not in known]
+            if not save_collection(current + additions, user_id=user_id):
+                return False, "Could not save the imported cards to this account. The original CSV is still available."
+            config["legacy_collection_owner"] = "migrated:" + user_id
+            save_config(config)
+            return True, f"Copied {len(additions)} card copies into this account; the original CSV and a backup are kept on this PC."
+        except Exception:
+            return False, "Could not import the legacy collection. The original CSV is still available."
+
+def load_sync_state(user_id=None):
+    path = _user_file("sync_state.json", user_id)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
     return []
 
-def save_sync_state(state):
+def save_sync_state(state, user_id=None):
+    path = _user_file("sync_state.json", user_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
-        with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=4)
+        os.replace(temporary, path)
     except Exception:
         pass
 
@@ -117,8 +227,14 @@ DEFAULT_CONFIG = {
     "firebase_email": "",
     "firebase_password": "",
     "firebase_id_token": "",
+    "firebase_refresh_token": "",
     "firebase_remember_password": True,
+    "legacy_collection_owner": "",
     "username": "Trainer",
+    "profile_picture_source": "pokemon",
+    "profile_featured_dex": 25,
+    "profile_image_url": "",
+    "profile_image_path": "",
     "cover_title": "Pokémon Collection",
     "cover_subtitle": "My Binder Manager",
     "cover_owner": "Ash",
@@ -377,6 +493,7 @@ def find_pokemon(query, db):
 def load_config():
     config_loaded = False
     config = DEFAULT_CONFIG.copy()
+    loaded = {}
     
     if os.path.exists(CONFIG_FILE):
         try:
@@ -394,36 +511,59 @@ def load_config():
         if k not in config:
             config[k] = v
             
-    # Generate unique firebase_user_id if missing or empty
-    if not config.get("firebase_user_id"):
-        import uuid
-        owner = config.get("cover_owner", "user").strip().lower().replace(" ", "_")
-        if not owner:
-            owner = "user"
-        unique_suffix = uuid.uuid4().hex[:6]
-        config["firebase_user_id"] = f"{owner}_{unique_suffix}"
+    user_id = _active_user_id(config)
+    profile_path = _profile_file(user_id)
+    if not os.path.exists(profile_path) and any(key in loaded for key in PROFILE_FIELDS):
+        _save_profile({**DEFAULT_CONFIG, **loaded}, user_id)
+    config.update(_load_profile(user_id))
+
+    if os.path.isfile(DATA_FILE) and not config.get("legacy_collection_owner"):
+        config["legacy_collection_owner"] = user_id or "ambiguous"
         save_config(config)
     elif not config_loaded:
-        # If it was not loaded from disk, save default config + generated user_id
         save_config(config)
-        
+
+    _migrate_legacy_user_data(config)
     return config
 
 def save_config(config):
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
+        user_id = _active_user_id(config)
+        _save_profile(config, user_id)
+        persisted = dict(config)
+        for key in PROFILE_FIELDS:
+            persisted.pop(key, None)
+        persisted["firebase_password"] = ""
+        temporary = CONFIG_FILE + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
+            json.dump(persisted, f, indent=4, ensure_ascii=False)
+        os.replace(temporary, CONFIG_FILE)
     except Exception as e:
         print(f"{CLR_FAIL}[!] Error saving configuration: {e}{CLR_RESET}")
 
 COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID"]
 
-def load_collection():
+def legacy_copy_id(card, index):
+    identity = "|".join(str(card.get(field, "") or "") for field in (
+        "Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Catalog Card ID", "Set ID", "Card Number"
+    )) + "|" + str(index)
+    return "legacy-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+
+def load_collection(user_id=None):
+    if user_id is None:
+        config = load_config()
+        user_id = _active_user_id(config)
+        if user_id:
+            _migrate_legacy_user_data(config)
+    path = _user_file("pokemon_binder.csv", user_id)
+    return _load_collection_file(path, user_id)
+
+def _load_collection_file(path, user_id=None):
     collection = []
     migration_needed = False
-    if os.path.exists(DATA_FILE):
+    if os.path.exists(path):
         try:
-            with open(DATA_FILE, "r", newline="", encoding="utf-8") as f:
+            with open(path, "r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 # If 'Type' is missing from the headers, we must trigger migration
                 has_type_column = "Type" in reader.fieldnames if reader.fieldnames else False
@@ -432,11 +572,14 @@ def load_collection():
                 if reader.fieldnames and any(field not in reader.fieldnames for field in COLLECTION_FIELDS):
                     migration_needed = True
                 
-                for row in reader:
+                for index, row in enumerate(reader):
                     # Parse numerical fields safely
                     row["Page"] = int(row["Page"])
                     row["Slot"] = int(row["Slot"])
                     row["Dex Number"] = int(row["Dex Number"]) if row["Dex Number"] else 0
+                    if not row.get("Copy ID"):
+                        row["Copy ID"] = legacy_copy_id(row, index)
+                        migration_needed = True
                     if not row.get("Image URL"):
                         row.pop("Image URL", None)
                     for field in COLLECTION_FIELDS[9:]:
@@ -498,46 +641,41 @@ def load_collection():
             
             if migration_needed:
                 print(f"{CLR_INFO}[i] Database migration triggered: upgrading old rarity fields...{CLR_RESET}")
-                save_collection(collection)
+                if path == DATA_FILE:
+                    backup = path + ".pre-migration.bak"
+                    if not os.path.exists(backup):
+                        shutil.copy2(path, backup)
+                save_collection(collection, user_id=user_id)
         except Exception as e:
             print(f"{CLR_FAIL}[!] Error reading collection CSV: {e}{CLR_RESET}")
     return collection
 
-def save_collection(collection):
+def save_collection(collection, user_id=None):
     fieldnames = COLLECTION_FIELDS
+    path = _user_file("pokemon_binder.csv", user_id)
     try:
-        with open(DATA_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for card in collection:
-                row = {k: card.get(k, "") for k in fieldnames}
-                writer.writerow(row)
+        with COLLECTION_LOCK:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            temporary = path + ".tmp"
+            with open(temporary, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for card in collection:
+                    row = {k: card.get(k, "") for k in fieldnames}
+                    writer.writerow(row)
+            os.replace(temporary, path)
         return True
     except Exception as e:
+        if os.path.exists(path + ".tmp"):
+            os.remove(path + ".tmp")
         print(f"{CLR_FAIL}[!] Error saving collection: {e}{CLR_RESET}")
         return False
 
 def add_card_to_csv(card):
-    fieldnames = COLLECTION_FIELDS
-    file_exists = os.path.exists(DATA_FILE)
-    try:
-        if file_exists:
-            with open(DATA_FILE, "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                if not reader.fieldnames or any(field not in reader.fieldnames for field in fieldnames):
-                    collection = load_collection()
-                    collection.append(card)
-                    return save_collection(collection)
-        with open(DATA_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            row = {k: card.get(k, "") for k in fieldnames}
-            writer.writerow(row)
-        return True
-    except Exception as e:
-        print(f"{CLR_FAIL}[!] Error writing to CSV file: {e}{CLR_RESET}")
-        return False
+    with COLLECTION_LOCK:
+        collection = load_collection()
+        collection.append(card)
+        return save_collection(collection)
 
 # ==================== GOOGLE SHEETS SYNC MODULE ====================
 
@@ -677,7 +815,7 @@ def print_google_sheets_setup_guide():
 
 # ==================== FIREBASE SYNC MODULE ====================
 
-def make_firebase_request(url, method="GET", data=None, token=None):
+def make_firebase_request(url, method="GET", data=None, token=None, request_headers=None, return_etag=False):
     import urllib.request
     import urllib.error
     import json
@@ -685,6 +823,10 @@ def make_firebase_request(url, method="GET", data=None, token=None):
     headers = {
         "Content-Type": "application/json"
     }
+    if request_headers:
+        headers.update(request_headers)
+    if return_etag and method == "GET":
+        headers["X-Firebase-ETag"] = "true"
     if token:
         if token.startswith("ya29."):
             headers["Authorization"] = f"Bearer {token}"
@@ -702,18 +844,27 @@ def make_firebase_request(url, method="GET", data=None, token=None):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             res_content = response.read().decode("utf-8")
-            return json.loads(res_content) if res_content else None, None
+            result = json.loads(res_content) if res_content else None
+            return (result, None, response.headers.get("ETag")) if return_etag else (result, None)
     except urllib.error.HTTPError as e:
         try:
             err_msg = e.read().decode("utf-8")
             err_data = json.loads(err_msg)
             error = err_data.get('error', {})
             message = error.get('message', 'Request rejected') if isinstance(error, dict) else 'Request rejected'
-            return None, f"HTTP Error {e.code}: {message}"
+            result = None
+            if e.code == 412:
+                try:
+                    result = json.loads(err_msg)
+                except ValueError:
+                    pass
+            response = (result, "ETAG_MISMATCH", e.headers.get("ETag")) if e.code == 412 else (None, f"HTTP Error {e.code}: {message}", e.headers.get("ETag"))
+            return response if return_etag else response[:2]
         except Exception:
-            return None, f"HTTP Error {e.code}: {e.reason}"
+            response = (None, "ETAG_MISMATCH", e.headers.get("ETag")) if e.code == 412 else (None, f"HTTP Error {e.code}: {e.reason}", e.headers.get("ETag"))
+            return response if return_etag else response[:2]
     except Exception:
-        return None, "Connection error while contacting Firebase."
+        return (None, "Connection error while contacting Firebase.", None) if return_etag else (None, "Connection error while contacting Firebase.")
 
 def get_firebase_oauth_token():
     try:
@@ -745,6 +896,9 @@ def firebase_sign_in(config):
     
     if not api_key or not email or not password:
         return False, "Missing API Key, Email, or Password in settings."
+
+    previous_user_id = _active_user_id(config)
+    _save_profile(config, previous_user_id)
         
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
     data = {
@@ -760,16 +914,44 @@ def firebase_sign_in(config):
     if res_data and "idToken" in res_data:
         config["firebase_id_token"] = res_data["idToken"]
         config["firebase_user_id"] = res_data["localId"]
-        if not config.get("firebase_remember_password", True):
-            config["firebase_password"] = ""
+        config["firebase_refresh_token"] = res_data.get("refreshToken", "")
+        config["firebase_auth_method"] = "auth"
+        config["firebase_enabled"] = True
+        config.update(_load_profile(config["firebase_user_id"]))
+        config["firebase_password"] = ""
         save_config(config)
         return True, "Login successful!"
     return False, "Invalid response from authentication server."
+
+def firebase_refresh_id_token(config):
+    api_key = FIREBASE_API_KEY or config.get("firebase_api_key")
+    refresh_token = config.get("firebase_refresh_token")
+    if not api_key or not refresh_token:
+        return False, "Sign in to Firebase again to refresh your session."
+    try:
+        body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": refresh_token}).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://securetoken.googleapis.com/v1/token?key={api_key}",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        config["firebase_id_token"] = result["id_token"]
+        config["firebase_refresh_token"] = result.get("refresh_token", refresh_token)
+        config["firebase_user_id"] = result.get("user_id", config.get("firebase_user_id", ""))
+        save_config(config)
+        return True, "Firebase session refreshed."
+    except Exception:
+        return False, "Firebase session expired; sign in again."
 
 def firebase_sign_up(config, email, password):
     api_key = FIREBASE_API_KEY or config.get("firebase_api_key")
     if not api_key:
         return False, "Missing Firebase Web API Key in settings."
+
+    _save_profile(config, _active_user_id(config))
         
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
     data = {
@@ -784,262 +966,290 @@ def firebase_sign_up(config, email, password):
         
     if res_data and "idToken" in res_data:
         config["firebase_email"] = email
-        if config.get("firebase_remember_password", True):
-            config["firebase_password"] = password
+        config["firebase_password"] = ""
         config["firebase_id_token"] = res_data["idToken"]
         config["firebase_user_id"] = res_data["localId"]
+        config["firebase_refresh_token"] = res_data.get("refreshToken", "")
+        config["firebase_auth_method"] = "auth"
+        config["firebase_enabled"] = True
+        config.update(_load_profile(config["firebase_user_id"]))
         save_config(config)
         return True, "Registration successful!"
     return False, "Invalid response from registration server."
 
 def firebase_logout(config):
+    user_id = _active_user_id(config)
+    _save_profile(config, user_id)
     config["firebase_enabled"] = False
     config["firebase_email"] = ""
     config["firebase_password"] = ""
     config["firebase_id_token"] = ""
+    config["firebase_refresh_token"] = ""
     config["firebase_user_id"] = ""
+    config.update(_load_profile(""))
     save_config(config)
-    
-    # Remove local sync state to force union merge on next login
-    if os.path.exists(SYNC_STATE_FILE):
-        try:
-            os.remove(SYNC_STATE_FILE)
-        except Exception:
-            pass
-    return True, "Disconnected from Firebase and cleared sync state."
+    return True, "Disconnected from Firebase. This Windows profile's collection is local again."
+
+SYNC_PRINTING_FIELDS = ("Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID")
+
+def _remote_cards(data):
+    values = data if isinstance(data, list) else list(data.values()) if isinstance(data, dict) else []
+    result = {}
+    deleted = set()
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            continue
+        card = dict(value)
+        if not card.get("Copy ID"):
+            card["Copy ID"] = legacy_copy_id(card, index)
+        copy_id = str(card["Copy ID"])
+        if card.get("_deleted"):
+            deleted.add(copy_id)
+        else:
+            result[copy_id] = card
+    return result, deleted
+
+def _changed_fields(base, changed):
+    return [field for field in COLLECTION_FIELDS if field != "Copy ID" and str(base.get(field, "") or "") != str(changed.get(field, "") or "")]
+
+def _merge_copy(base, local, remote):
+    merged = dict(remote)
+    conflicts = []
+    local_printing_changed = any(str(base.get(field, "") or "") != str(local.get(field, "") or "") for field in SYNC_PRINTING_FIELDS)
+    remote_printing_changed = any(str(base.get(field, "") or "") != str(remote.get(field, "") or "") for field in SYNC_PRINTING_FIELDS)
+    if local_printing_changed:
+        if remote_printing_changed and any(str(local.get(field, "") or "") != str(remote.get(field, "") or "") for field in SYNC_PRINTING_FIELDS):
+            conflicts.append("printing")
+        for field in SYNC_PRINTING_FIELDS:
+            merged[field] = local.get(field, "")
+    for field in COLLECTION_FIELDS:
+        if field == "Copy ID" or field in SYNC_PRINTING_FIELDS:
+            continue
+        base_value = str(base.get(field, "") or "")
+        local_value = str(local.get(field, "") or "")
+        remote_value = str(remote.get(field, "") or "")
+        if local_value == base_value:
+            continue
+        if remote_value != base_value and remote_value != local_value:
+            conflicts.append(field)
+        merged[field] = local.get(field, "")
+    merged["Copy ID"] = local.get("Copy ID") or remote.get("Copy ID", "")
+    return merged, conflicts
+
+def _save_sync_conflicts(user_id, entries):
+    if not entries:
+        return True
+    path = _user_file("sync_conflicts.json", user_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        existing = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        known = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in existing if isinstance(item, dict)}
+        for item in entries:
+            serialized = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            if serialized not in known:
+                existing.append(item)
+                known.add(serialized)
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+        return True
+    except Exception:
+        return False
+
+def _copy_url(collection_url, copy_id):
+    return collection_url[:-5] + "/" + urllib.parse.quote(str(copy_id), safe="") + ".json"
+
+def _conditional_write_copy(collection_url, user_id, token, copy_id, base=None, local=None, delete=False, add=False):
+    copy_url = _copy_url(collection_url, copy_id)
+    for _ in range(3):
+        current, err, etag = make_firebase_request(copy_url, method="GET", token=token, return_etag=True)
+        if err:
+            return False, err
+        conflict = ""
+        if delete:
+            if not isinstance(current, dict) or current.get("_deleted"):
+                return True, ""
+            if base and _changed_fields(base, current):
+                if not _save_sync_conflicts(user_id, [{"copy_id": copy_id, "reason": "local-delete-remote-edit", "base": base, "local": None, "remote": current}]):
+                    return False, "Could not save the recovery record for a conflicting edit."
+                conflict = "local-delete-remote-edit"
+            updated = dict(current, _deleted=True)
+        elif current is None:
+            if not add:
+                if base and _changed_fields(base, local or {}):
+                    if not _save_sync_conflicts(user_id, [{"copy_id": copy_id, "reason": "remote-delete-local-edit", "base": base, "local": local, "remote": None}]):
+                        return False, "Could not save the recovery record for a removed card."
+                return True, ""
+            updated = dict(local or {})
+        elif current.get("_deleted"):
+            if add:
+                return False, "This copy was removed and cannot be restored with the same Copy ID."
+            if base and _changed_fields(base, local or {}):
+                if not _save_sync_conflicts(user_id, [{"copy_id": copy_id, "reason": "remote-delete-local-edit", "base": base, "local": local, "remote": None}]):
+                    return False, "Could not save the recovery record for a removed card."
+            return True, ""
+        elif add:
+            return True, ""
+        else:
+            updated, fields = _merge_copy(base or {}, local or {}, current)
+            if fields:
+                record = {"copy_id": copy_id, "reason": "same-field-edit", "fields": fields, "base": base, "local": local, "remote": current}
+                if not _save_sync_conflicts(user_id, [record]):
+                    return False, "Could not save the recovery record for a conflicting edit."
+                conflict = "same-field-edit"
+        updated.pop("_deleted", None) if not delete else None
+        if not delete and current and updated == current:
+            return True, ""
+        _, err, _ = make_firebase_request(
+            copy_url, method="PUT", data=updated, token=token,
+            request_headers={"If-Match": etag or "null_etag"}, return_etag=True
+        )
+        if err == "ETAG_MISMATCH":
+            continue
+        if err:
+            return False, err
+        return True, conflict
+    return False, "The same card changed repeatedly during sync; retry after refreshing."
 
 def sync_with_firebase(config, collection):
+    with COLLECTION_LOCK:
+        return _sync_with_firebase(config, collection)
+
+def _sync_with_firebase(config, collection):
     if not config.get("firebase_enabled"):
         return False, "Firebase sync is currently disabled."
-        
     db_url = FIREBASE_DB_URL or config.get("firebase_db_url")
+    user_id = str(config.get("firebase_user_id") or "").strip()
     if not db_url:
-        return False, "Firebase Database URL is not configured."
-        
-    auth_method = config.get("firebase_auth_method", "secret")
-    if FIREBASE_API_KEY and FIREBASE_DB_URL:
-        auth_method = "auth"
-        
-    secret = config.get("firebase_secret", "")
-    user_id = config.get("firebase_user_id", "default_user")
-    
-    # Clean database URL
+        return False, "Firebase client configuration is missing; the binder remains available in local mode."
+    if not user_id:
+        return False, "Sign in to Firebase before syncing this collection."
+    auth_method = config.get("firebase_auth_method", "auth")
+    if auth_method in ("secret", "service_account"):
+        return False, "Collection sync requires a personal Firebase Auth account; administrator credentials are not accepted."
+    if not config.get("firebase_id_token") and config.get("firebase_refresh_token"):
+        refreshed, message = firebase_refresh_id_token(config)
+        if not refreshed:
+            return False, message
+    token = config.get("firebase_id_token")
+    if not token and auth_method != "none":
+        return False, "Sign in to Firebase before syncing this collection."
     db_url = db_url.strip()
     if not db_url.startswith("http"):
         db_url = "https://" + db_url
-        
-    # Append path
-    path_url = f"{db_url.rstrip('/')}/users/{user_id}/collection.json"
-    
-    token = None
-    if auth_method == "service_account":
-        token, err = get_firebase_oauth_token()
-        if err:
-            return False, f"Firebase auth failed: {err}"
-    elif auth_method == "secret" and secret:
-        import urllib.parse
-        path_url += f"?auth={urllib.parse.quote(secret)}"
-    elif auth_method == "auth":
-        token = config.get("firebase_id_token")
-        if not token:
-            # Try to auto-login to refresh token
-            success, login_msg = firebase_sign_in(config)
-            if success:
-                token = config.get("firebase_id_token")
-                # User ID might have changed/loaded
-                user_id = config.get("firebase_user_id", "default_user")
-                path_url = f"{db_url.rstrip('/')}/users/{user_id}/collection.json"
-            else:
-                return False, f"Authentication required: {login_msg}"
-        
-    # 1. Fetch current remote collection from Firebase
-    remote_data, err = make_firebase_request(path_url, method="GET", token=token)
-    
-    # Handle automatic session refresh on 401 Unauthorized
+    user_path = f"{db_url.rstrip('/')}/users/{urllib.parse.quote(user_id, safe='')}"
+    collection_url = user_path + "/collection_v2.json"
+    legacy_url = user_path + "/collection.json"
+
+    remote_data, err = make_firebase_request(collection_url, method="GET", token=token)
     if err and "HTTP Error 401" in err and auth_method == "auth":
-        success, login_msg = firebase_sign_in(config)
-        if success:
-            token = config.get("firebase_id_token")
-            user_id = config.get("firebase_user_id", "default_user")
-            path_url = f"{db_url.rstrip('/')}/users/{user_id}/collection.json"
-            remote_data, err = make_firebase_request(path_url, method="GET", token=token)
-        else:
-            return False, f"Session expired and auto-login failed: {login_msg}"
-            
+        refreshed, message = firebase_refresh_id_token(config)
+        if not refreshed:
+            return False, message
+        token = config.get("firebase_id_token")
+        remote_data, err = make_firebase_request(collection_url, method="GET", token=token)
     if err:
         return False, f"Failed to retrieve Firebase data: {err}"
-        
-    # 1.5 Update Profile / Username from cloud
+
+    remote_all, remote_deleted = _remote_cards(remote_data)
+    if remote_data is None:
+        legacy_data, err = make_firebase_request(legacy_url, method="GET", token=token)
+        if err:
+            return False, f"Failed to retrieve legacy Firebase data: {err}"
+        legacy_cards, _ = _remote_cards(legacy_data)
+        for copy_id, old_card in legacy_cards.items():
+            success, message = _conditional_write_copy(collection_url, user_id, token, copy_id, local=old_card, add=True)
+            if not success:
+                return False, f"Could not migrate the legacy Firebase collection: {message}"
+        if legacy_cards:
+            remote_data, err = make_firebase_request(collection_url, method="GET", token=token)
+            if err:
+                return False, f"Failed to read the migrated Firebase collection: {err}"
+            remote_all, remote_deleted = _remote_cards(remote_data)
+
     cloud_profile = fetch_profile_from_firebase(config)
     if cloud_profile:
-        config["username"] = cloud_profile.get("username", config.get("username", "Trainer"))
-        config["profile_picture_source"] = cloud_profile.get("profile_picture_source", config.get("profile_picture_source", "pokemon"))
-        config["profile_featured_dex"] = int(cloud_profile.get("profile_featured_dex", config.get("profile_featured_dex", 25)))
-        config["profile_image_url"] = cloud_profile.get("profile_image_url", config.get("profile_image_url", ""))
-        
-        # Save custom uploaded image locally if present in cloud
+        for key in PROFILE_FIELDS:
+            profile_key = {"username": "username", "profile_picture_source": "profile_picture_source", "profile_featured_dex": "profile_featured_dex", "profile_image_url": "profile_image_url"}.get(key, key)
+            if profile_key in cloud_profile:
+                config[key] = cloud_profile[profile_key]
         base64_img = cloud_profile.get("profile_image_base64")
         if base64_img and config.get("profile_picture_source") in ["upload", "base64"]:
             try:
                 import base64 as b64
-                filepath = os.path.join(DATA_DIR, "profile_image.png")
+                filepath = local_profile_image_path(user_id)
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
                 with open(filepath, "wb") as f:
                     f.write(b64.b64decode(base64_img))
                 config["profile_image_path"] = "profile_image.png"
-                # Map cloud source name to PC internal name
                 if config.get("profile_picture_source") == "base64":
                     config["profile_picture_source"] = "upload"
             except Exception:
                 pass
         save_config(config)
-    else:
-        if not config.get("username"):
-            cloud_username = fetch_username_from_firebase(config)
-            if cloud_username:
-                config["username"] = cloud_username
-                save_config(config)
 
+    def indexed(cards):
+        return {str(card.get("Copy ID")): dict(card) for card in cards if card.get("Copy ID")}
 
-    remote_collection = []
-    if remote_data:
-        if isinstance(remote_data, list):
-            remote_collection = [c for c in remote_data if c is not None]
-        elif isinstance(remote_data, dict):
-            remote_collection = list(remote_data.values())
-            
-        # Normalize remote collection rarities to match current schema
-        for r_card in remote_collection:
-            t_val = str(r_card.get("Type", "")).strip()
-            t_val_lower = t_val.lower()
-            if t_val == "IR" or t_val_lower == "ir" or t_val_lower == "ilustration rare":
-                r_card["Type"] = "Illustration Rare"
-            elif t_val == "SIR" or t_val_lower == "sir":
-                r_card["Type"] = "Special Illustration Rare"
-            elif t_val == "SR" or t_val_lower == "sr":
-                r_card["Type"] = "Secret Rare"
-            elif t_val == "HR" or t_val_lower == "hr":
-                r_card["Type"] = "Hyper Rare"
-            elif t_val == "Holo" or t_val_lower == "holo" or t_val_lower == "holofoil":
-                r_card["Type"] = "Holofoil Rare"
-            elif t_val_lower in ["common", "uncommon"]:
-                r_card["Type"] = "Normal"
-            
-    # 2. Perform 3-way Merge
-    last_sync = load_sync_state()
-    
-    # Debug log setup
-    debug_log_path = os.path.join(DATA_DIR, "debug_sync.log")
-    def log_debug(msg):
-        with open(debug_log_path, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    local_cards = [dict(card) for card in collection]
+    for index, card in enumerate(local_cards):
+        if not card.get("Copy ID"):
+            card["Copy ID"] = legacy_copy_id(card, index)
+    local = indexed(local_cards)
+    base = indexed(load_sync_state(user_id))
+    conflict_count = 0
+    is_first_sync = not base
 
-    log_debug(f"Starting Sync. Local: {len(collection)}, Remote: {len(remote_collection)}, LastSync: {len(last_sync)}")
-
-    # If no sync state exists, perform a union merge on first sync without establishing baseline from remote
-    is_first_sync = not last_sync
     if is_first_sync:
-        log_debug("First sync detected. Baseline is empty; union-merging local and remote collections non-destructively.")
-
-    def to_int(v, default=0):
-        if v is None: return default
-        try:
-            s = str(v).strip()
-            if not s: return default
-            return int(float(s))
-        except (ValueError, TypeError):
-            return default
-
-    def get_card_identity(c):
-        # Extremely robust identity tuple
-        def safe_str(v):
-            if v is None: return ""
-            return str(v).lower().strip()
-
-        copy_id = safe_str(c.get("Copy ID"))
-        if copy_id:
-            return ("copy", copy_id)
-
-        return (
-            safe_str(c.get("Catalog Card ID")),
-            safe_str(c.get("Set ID")),
-            to_int(c.get("Page"), 1),
-            to_int(c.get("Slot"), 1),
-            to_int(c.get("Dex Number"), 0),
-            safe_str(c.get("Name")),
-            safe_str(c.get("Type") or "Normal").lower(),
-            safe_str(c.get("Condition") or "NM").upper(), # Normalize condition to uppercase
-            safe_str(c.get("Notes"))
-        )
-        
-    def group_by_id(coll):
-        groups = {}
-        for card in coll:
-            key = get_card_identity(card)
-            if key not in groups:
-                groups[key] = []
-            groups[key].append(card)
-        return groups
-
-    local_groups = group_by_id(collection)
-    remote_groups = group_by_id(remote_collection)
-    last_sync_groups = group_by_id(last_sync)
-    
-    all_keys = set(local_groups.keys()).union(set(remote_groups.keys())).union(set(last_sync_groups.keys()))
-    
-    merged_collection = []
-    for key in all_keys:
-        l_list = local_groups.get(key, [])
-        r_list = remote_groups.get(key, [])
-        s_list = last_sync_groups.get(key, [])
-        
-        # 3-way merge: base + local_delta + remote_delta (or union on first sync)
-        if is_first_sync:
-            final_count = max(len(l_list), len(r_list))
-        else:
-            l_delta = len(l_list) - len(s_list)
-            r_delta = len(r_list) - len(s_list)
-            final_count = max(0, len(s_list) + l_delta + r_delta)
-        
-        if final_count != len(l_list):
-            log_debug(f"Merge Change for {key}: Local={len(l_list)} -> Final={final_count} (Remote={len(r_list)}, Base={len(s_list)})")
-        
-        for i in range(final_count):
-            if i < len(l_list):
-                merged_collection.append(l_list[i])
-            elif i < len(r_list):
-                card_to_add = r_list[i].copy()
-                # Ensure types are correct for the newly added card
-                card_to_add["Page"] = to_int(card_to_add.get("Page"), 1)
-                card_to_add["Slot"] = to_int(card_to_add.get("Slot"), 1)
-                card_to_add["Dex Number"] = to_int(card_to_add.get("Dex Number"), 0)
-                merged_collection.append(card_to_add)
-                
-    # Sort merged collection
-    merged_collection.sort(key=lambda c: (int(c.get("Page", 1)), int(c.get("Slot", 1)), str(c.get("Name", ""))))
-    
-    # 3. Push merged collection back to Firebase
-    _, err = make_firebase_request(path_url, method="PUT", data=merged_collection, token=token)
-    
-    # Handle automatic session refresh on push if it expires
-    if err and "HTTP Error 401" in err and auth_method == "auth":
-        success, login_msg = firebase_sign_in(config)
-        if success:
-            token = config.get("firebase_id_token")
-            user_id = config.get("firebase_user_id", "default_user")
-            path_url = f"{db_url.rstrip('/')}/users/{user_id}/collection.json"
-            _, err = make_firebase_request(path_url, method="PUT", data=merged_collection, token=token)
-        else:
-            return False, f"Session expired and auto-login failed: {login_msg}"
-            
-    if err:
-        return False, f"Failed to push merged data to Firebase: {err}"
-        
-    # 4. Update local CSV and Sync State
-    if save_collection(merged_collection):
-        save_sync_state(merged_collection)
-        return True, f"Successfully synced {len(merged_collection)} cards with Firebase!"
+        for copy_id, card in local.items():
+            if copy_id not in remote_all and copy_id not in remote_deleted:
+                ok, message = _conditional_write_copy(collection_url, user_id, token, copy_id, local=card, add=True)
+                if not ok:
+                    return False, f"Failed to add a card to Firebase: {message}"
     else:
-        return False, "Merged data pushed to Firebase, but failed to write locally to CSV."
+        for copy_id, old_card in base.items():
+            local_card = local.get(copy_id)
+            remote_card = remote_all.get(copy_id)
+            if local_card is None:
+                if remote_card is not None:
+                    ok, message = _conditional_write_copy(collection_url, user_id, token, copy_id, base=old_card, delete=True)
+                    if not ok:
+                        return False, f"Failed to remove a card from Firebase: {message}"
+                    conflict_count += int("local-delete-remote-edit" in message)
+            elif remote_card is None:
+                if _changed_fields(old_card, local_card):
+                    reason = "remote-delete-local-edit"
+                    record = {"copy_id": copy_id, "reason": reason, "base": old_card, "local": local_card, "remote": None}
+                    if not _save_sync_conflicts(user_id, [record]):
+                        return False, "Could not save the recovery record for a removed card."
+                    conflict_count += 1
+            elif _changed_fields(old_card, local_card):
+                ok, message = _conditional_write_copy(collection_url, user_id, token, copy_id, base=old_card, local=local_card)
+                if not ok:
+                    return False, f"Failed to update a card in Firebase: {message}"
+                conflict_count += int(message == "same-field-edit")
+
+        for copy_id, card in local.items():
+            if copy_id not in base and copy_id not in remote_all and copy_id not in remote_deleted:
+                ok, message = _conditional_write_copy(collection_url, user_id, token, copy_id, local=card, add=True)
+                if not ok:
+                    return False, f"Failed to add a card to Firebase: {message}"
+
+    final_data, err = make_firebase_request(collection_url, method="GET", token=token)
+    if err:
+        return False, f"Failed to confirm Firebase data: {err}"
+    final_remote, _ = _remote_cards(final_data)
+    merged_collection = sorted(final_remote.values(), key=lambda c: (int(c.get("Page", 1) or 1), int(c.get("Slot", 1) or 1), str(c.get("Name", ""))))
+    if not save_collection(merged_collection, user_id=user_id):
+        return False, "Firebase accepted the changes, but the local CSV could not be saved. Retry sync to recover using the same Copy IDs."
+    save_sync_state(merged_collection, user_id=user_id)
+    if conflict_count:
+        return True, f"Synced {len(merged_collection)} cards. {conflict_count} conflict(s) were saved for recovery in this account's sync_conflicts.json."
+    return True, f"Successfully synced {len(merged_collection)} cards with Firebase."
 
 def push_username_to_firebase(config, username):
     db_url = FIREBASE_DB_URL or config.get("firebase_db_url")

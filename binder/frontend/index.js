@@ -28,6 +28,7 @@ let appConfig = {
 };
 
 let collection = [];
+let firebaseSessionRevision = 0;
 let pokemonLookupList = []; // Array of {id, name}
 let activeTab = "binder";
 let currentPage = 0;
@@ -97,10 +98,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // ==================== API FETCH CALLS ====================
 async function loadSettings() {
+    const sessionRevision = firebaseSessionRevision;
     try {
         const res = await fetch("/api/settings");
         if (res.ok) {
-            appConfig = await res.json();
+            const config = await res.json();
+            if (sessionRevision !== firebaseSessionRevision) return;
+            appConfig = config;
             
             // Set CSS custom grid parameters
             const root = document.documentElement;
@@ -138,17 +142,28 @@ async function loadSettings() {
 }
 
 async function loadCollection() {
+    const sessionRevision = firebaseSessionRevision;
     try {
-        const res = await fetch("/api/collection");
+        const res = await accountFetch("/api/collection");
         if (res.ok) {
-            collection = await res.json();
+            const cards = await res.json();
+            if (sessionRevision !== firebaseSessionRevision) return;
+            collection = cards;
             updateDashboardStats();
             renderBinderGrid();
             renderCollectionTable();
+            return true;
         }
     } catch (e) {
-        showToast("Error loading collection cards", "error");
+        if (sessionRevision === firebaseSessionRevision) showToast("Error loading collection cards", "error");
     }
+    return false;
+}
+
+function accountFetch(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (appConfig.firebase_user_id) headers["X-Expected-Firebase-UID"] = appConfig.firebase_user_id;
+    return fetch(url, { ...options, headers });
 }
 
 async function loadPokemonDb() {
@@ -251,6 +266,9 @@ function switchTab(tabId) {
         headerTitle.textContent = "Add Pokémon Card";
         headerSubtitle.textContent = "Search Pokédex species and catalog binder placement";
         resetAddCardForm();
+    } else if (tabId === "market") {
+        headerTitle.textContent = "Market Prices";
+        headerSubtitle.textContent = "Compare references for a selected edition and finish";
     } else if (tabId === "settings") {
         headerTitle.textContent = "System Configuration";
         headerSubtitle.textContent = "Grid layout sheets, sorting order, and sync setups";
@@ -258,6 +276,205 @@ function switchTab(tabId) {
         headerTitle.textContent = "Trainer Profile Settings";
         headerSubtitle.textContent = "Customize your trainer username and avatar image";
     }
+}
+
+let marketClient, marketLatest, marketDetailLatest, marketTimer, marketSelected;
+let marketCards = [], marketShown = 0, marketGroups = [], marketEntries = new Map(), marketSearchStale = false;
+function scheduleMarketSearch() {
+    marketClient ||= new MarketClient();
+    marketLatest ||= new LatestRequest();
+    marketDetailLatest ||= new LatestRequest();
+    const revision = marketLatest.next();
+    marketDetailLatest.next();
+    marketSelected = null;
+    marketCards = []; marketShown = 0; marketEntries = new Map();
+    clearTimeout(marketTimer);
+    document.getElementById('market-details').hidden = true;
+    document.getElementById('market-empty').hidden = false;
+    document.getElementById('market-retry').hidden = true;
+    document.getElementById('market-more').hidden = true;
+    document.getElementById('market-options').replaceChildren();
+    document.getElementById('market-status').textContent = 'Searching…';
+    marketTimer = setTimeout(() => searchMarket(revision), 350);
+}
+
+async function searchMarket(revision) {
+    const status = document.getElementById('market-status');
+    const name = document.getElementById('market-name').value.trim();
+    if (!name) { status.textContent = 'Search a card name to discover its editions.'; return; }
+    const setPicker = document.getElementById('market-set');
+    const number = document.getElementById('market-number').value.trim().toLowerCase().split('/')[0];
+    try {
+        const result = await marketClient.get('cards?name=' + encodeURIComponent(name));
+        const sets = await marketClient.get('sets');
+        if (!marketLatest.isCurrent(revision)) return;
+        if (!Array.isArray(result.data) || !Array.isArray(sets.data)) throw new Error('Invalid catalog response');
+        const names = Object.fromEntries(sets.data.map(s => [s.id, s.name]));
+        const candidates = result.data.filter(c => c.id && c.localId != null).map(c => ({ ...c,
+            setId: c.id.slice(0, -(String(c.localId).length + 1)), number: String(c.localId) }));
+        const previousSet = setPicker.value;
+        const setIds = [...new Set(candidates.map(c => c.setId))].sort((a, b) => (names[a] || a).localeCompare(names[b] || b));
+        setPicker.replaceChildren();
+        for (const id of ['', ...setIds]) {
+            const option = document.createElement('option'); option.value = id;
+            option.textContent = id ? names[id] || id : 'All sets'; setPicker.appendChild(option);
+        }
+        setPicker.value = setIds.includes(previousSet) ? previousSet : '';
+        marketCards = candidates.map(c => ({ ...c, setName: names[c.setId] || c.setId }))
+            .filter(c => (!setPicker.value || c.setId === setPicker.value) &&
+                (!number || String(c.localId).toLowerCase() === number))
+            .sort((a, b) => a.setName.localeCompare(b.setName) || a.number.localeCompare(b.number, undefined, { numeric: true }));
+        marketSearchStale = result.stale || sets.stale;
+        if (!marketCards.length) { status.textContent = 'No editions found. Try another set or card number.'; return; }
+        await loadMoreMarket(revision);
+    } catch (error) {
+        if (marketLatest.isCurrent(revision)) {
+            status.textContent = 'Could not load editions. ' + error.message;
+            document.getElementById('market-retry').hidden = false;
+        }
+    }
+}
+
+function marketMoney(price) {
+    return new Intl.NumberFormat('en-GB', { style: 'currency', currency: price.currency }).format(price.amount);
+}
+
+async function loadMoreMarket(revision = marketLatest.revision) {
+    if (!marketLatest.isCurrent(revision)) return;
+    const batch = marketCards.slice(marketShown, marketShown + 12);
+    marketShown += batch.length;
+    const more = document.getElementById('market-more'); more.hidden = true;
+    const list = document.getElementById('market-options');
+    for (const card of batch) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'market-result';
+        button.setAttribute('aria-pressed', marketSelected?.id === card.id ? 'true' : 'false');
+        const image = document.createElement('img');
+        image.alt = ''; image.loading = 'lazy';
+        const url = catalogImageUrl(card.image, 'low');
+        if (url) image.src = url;
+        else { image.hidden = true; button.classList.add('market-no-art'); }
+        image.addEventListener('error', () => { image.hidden = true; button.classList.add('market-no-art'); });
+        const text = document.createElement('span'); text.className = 'market-result-name';
+        text.textContent = `${card.name}\n${card.setName} · #${card.number}`;
+        const preview = document.createElement('span'); preview.className = 'market-result-price'; preview.textContent = 'Checking price…';
+        button.append(image, text, preview);
+        button.addEventListener('click', () => selectMarketCard(card));
+        marketEntries.set(card.id, { card, button, preview }); list.appendChild(button);
+    }
+    document.getElementById('market-status').textContent = `${marketCards.length} editions · Showing ${marketShown} · Checking prices…`;
+    let next = 0;
+    // Only inspect a displayed batch, with three concurrent requests; never fetch the whole catalog.
+    await Promise.all(Array.from({ length: Math.min(3, batch.length) }, async () => {
+        while (next < batch.length && marketLatest.isCurrent(revision)) {
+            const card = batch[next++];
+            const entry = marketEntries.get(card.id);
+            try {
+                const result = await marketClient.get('cards/' + encodeURIComponent(card.id));
+                if (!marketLatest.isCurrent(revision)) return;
+                const quote = groupMarketPrices(parsePrices(result.data, card, result.consulted))[0]?.primary;
+                entry.preview.textContent = quote ? `${marketMoney(quote)} · ${quote.type}${result.stale ? ' · Outdated' : ''}` : 'No quote from provider';
+                entry.preview.dataset.state = quote ? 'priced' : 'missing';
+            } catch (_) {
+                if (!marketLatest.isCurrent(revision)) return;
+                entry.preview.textContent = 'Could not check price'; entry.preview.dataset.state = 'error';
+            }
+        }
+    }));
+    if (!marketLatest.isCurrent(revision)) return;
+    updateMarketSearchStatus();
+    more.hidden = marketShown >= marketCards.length;
+}
+
+function updateMarketSearchStatus() {
+    const priced = [...marketEntries.values()].filter(entry => entry.preview.dataset.state === 'priced').length;
+    document.getElementById('market-status').textContent = `${marketCards.length} editions · ${marketShown} shown · ${priced} with prices${marketSearchStale ? ' · Outdated catalog' : ''}`;
+}
+
+function retryMarket() {
+    if (marketSelected) selectMarketCard(marketSelected, true);
+    else scheduleMarketSearch();
+}
+
+async function selectMarketCard(selected, refresh = false) {
+    marketSelected = selected;
+    const revision = marketDetailLatest.next();
+    const status = document.getElementById('market-detail-status');
+    document.getElementById('market-empty').hidden = true;
+    document.getElementById('market-details').hidden = false;
+    document.getElementById('market-quote-controls').hidden = true;
+    document.getElementById('market-detail-retry').hidden = true;
+    document.getElementById('market-card-name').textContent = selected.name;
+    document.getElementById('market-card-set').textContent = `${selected.setName} · #${selected.number}`;
+    document.getElementById('market-price-value').textContent = '…';
+    document.getElementById('market-price-type').textContent = 'Price reference';
+    const image = document.getElementById('market-card-image');
+    const artwork = catalogImageUrl(selected.image, 'low');
+    image.hidden = !artwork; image.alt = selected.name;
+    document.getElementById('market-art-empty').hidden = !!artwork;
+    image.onerror = () => { image.hidden = true; document.getElementById('market-art-empty').hidden = false; };
+    if (artwork) image.src = artwork;
+    for (const entry of marketEntries.values()) entry.button.setAttribute('aria-pressed', entry.card.id === selected.id ? 'true' : 'false');
+    status.textContent = 'Loading price…';
+    if (window.matchMedia?.('(max-width: 900px)').matches) document.getElementById('market-prices').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+        const result = await marketClient.get('cards/' + encodeURIComponent(selected.id), refresh);
+        if (!marketDetailLatest.isCurrent(revision)) return;
+        marketGroups = groupMarketPrices(parsePrices(result.data, selected, result.consulted)).map(group => ({ ...group, stale: result.stale, error: result.error }));
+        const detailedArtwork = catalogImageUrl(result.data.image, 'low');
+        if (detailedArtwork && detailedArtwork !== artwork) {
+            image.hidden = false; document.getElementById('market-art-empty').hidden = true; image.src = detailedArtwork;
+        }
+        const picker = document.getElementById('market-variant'); picker.replaceChildren();
+        marketGroups.forEach((group, index) => {
+            const option = document.createElement('option'); option.value = String(index);
+            option.textContent = `${group.variant} · ${group.currency} · ${group.source.replace(' via TCGdex', '')}`;
+            picker.appendChild(option);
+        });
+        picker.value = '0';
+        if (marketGroups.length) renderMarketGroup();
+        else {
+            document.getElementById('market-price-value').textContent = '—';
+            status.textContent = 'The provider has no quote for this edition. Try another edition.';
+        }
+        if (result.stale) status.textContent = 'Outdated cached price · ' + result.error;
+        document.getElementById('market-detail-retry').hidden = !result.stale && marketGroups.length > 0;
+        if (refresh) {
+            const preview = marketEntries.get(selected.id)?.preview;
+            if (preview) {
+                preview.textContent = marketGroups.length ? `${marketMoney(marketGroups[0].primary)} · ${marketGroups[0].primary.type}${result.stale ? ' · Outdated' : ''}` : 'No quote from provider';
+                preview.dataset.state = marketGroups.length ? 'priced' : 'missing';
+                updateMarketSearchStatus();
+            }
+        }
+    } catch (error) {
+        if (marketDetailLatest.isCurrent(revision)) {
+            document.getElementById('market-price-value').textContent = '—';
+            status.textContent = 'Could not load the price. ' + error.message;
+            document.getElementById('market-detail-retry').hidden = false;
+        }
+    }
+}
+
+function renderMarketGroup() {
+    const group = marketGroups[Number(document.getElementById('market-variant').value)];
+    if (!group) return;
+    document.getElementById('market-quote-controls').hidden = false;
+    document.getElementById('market-price-value').textContent = marketMoney(group.primary);
+    document.getElementById('market-price-type').textContent = group.primary.type;
+    document.getElementById('market-detail-status').textContent = group.stale ? 'Outdated cached price · ' + group.error :
+        group.referenceOnly ? 'Edition reference · Specific finish not confirmed.' : 'Reference for the selected finish.';
+    const metrics = document.getElementById('market-price-metrics'); metrics.replaceChildren();
+    for (const price of group.prices.filter(price => price !== group.primary)) {
+        const metric = document.createElement('div');
+        const label = document.createElement('span'); label.textContent = price.type;
+        const value = document.createElement('strong'); value.textContent = marketMoney(price);
+        metric.append(label, value); metrics.appendChild(metric);
+    }
+    document.getElementById('market-price-source').textContent = `${group.source} · ${group.currency}`;
+    const date = new Date(group.primary.updated);
+    document.getElementById('market-price-date').textContent = `${group.primary.dateLabel}: ${Number.isNaN(date.valueOf()) ? group.primary.updated : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}`;
+    document.getElementById('market-price-date').title = group.primary.updated;
 }
 
 function updateDashboardStats() {
@@ -673,7 +890,7 @@ function getCardImageSource(card) {
 async function persistCardImageMatch(card, printing, match) {
     if (!card || !card["Copy ID"] || !printing || !match) return;
     try {
-        const response = await fetch("/api/update-card", {
+        const response = await accountFetch("/api/update-card", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 copy_id: card["Copy ID"], catalog_card_id: printing.id, set_id: printing.setId,
@@ -1400,7 +1617,7 @@ async function saveModalCopyDetails() {
     button.disabled = true;
     status.textContent = "A guardar…";
     try {
-        const response = await fetch("/api/update-card", {
+        const response = await accountFetch("/api/update-card", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 copy_id: card["Copy ID"] || "", page: document.getElementById("modal-edit-page").value,
@@ -1441,7 +1658,7 @@ async function saveModalCatalogCard() {
     status.textContent = "A guardar a nova edição…";
     document.getElementById("modal-save-set").disabled = true;
     try {
-        const response = await fetch("/api/update-card", {
+        const response = await accountFetch("/api/update-card", {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
         });
         const data = await response.json();
@@ -1623,7 +1840,7 @@ async function deleteCardDirectly(page, slot, name, dateAdded = null, copyId = n
             const payload = { page, slot, name };
             if (dateAdded) payload.date_added = dateAdded;
             if (copyId) payload.copy_id = copyId;
-            const res = await fetch("/api/remove", {
+            const res = await accountFetch("/api/remove", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
@@ -1810,10 +2027,12 @@ function selectPokemonCustom(query) {
 }
 
 async function fetchSuggestedPosition(id, name) {
+    const sessionRevision = firebaseSessionRevision;
     try {
-        const res = await fetch(`/api/suggest-position?id=${id}&name=${encodeURIComponent(name)}`);
+        const res = await accountFetch(`/api/suggest-position?id=${id}&name=${encodeURIComponent(name)}`);
         if (res.ok) {
             const data = await res.json();
+            if (sessionRevision !== firebaseSessionRevision) return;
             
             // Show recommended position banner
             const banner = document.getElementById("suggested-banner");
@@ -1916,7 +2135,7 @@ async function submitAddCard() {
     showToast("Saving card to binder...", "info");
     
     try {
-        const res = await fetch("/api/add", {
+        const res = await accountFetch("/api/add", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2087,7 +2306,7 @@ async function saveModalNotes() {
     const status = document.getElementById("modal-notes-status");
     status.textContent = "A guardar…";
     try {
-        const response = await fetch("/api/update-card", {
+        const response = await accountFetch("/api/update-card", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2135,7 +2354,7 @@ async function deleteCardFromModal() {
         showToast("Removing card from collection...", "info");
         
         try {
-            const res = await fetch("/api/remove", {
+            const res = await accountFetch("/api/remove", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2199,7 +2418,7 @@ async function saveSettings() {
     showToast("Saving configurations...", "info");
     
     try {
-        const res = await fetch("/api/settings", {
+        const res = await accountFetch("/api/settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2238,6 +2457,7 @@ function toggleGsheetNameInput() {
 }
 
 async function triggerManualSync() {
+    const sessionRevision = firebaseSessionRevision;
     const sidebarBtn = document.getElementById("sync-now-sidebar-btn");
     const settingsBtn = document.getElementById("sync-now-settings-btn");
     const dot = document.querySelector(".status-dot");
@@ -2252,21 +2472,31 @@ async function triggerManualSync() {
     showToast("Synchronizing collection...", "info");
     
     try {
-        const res = await fetch("/api/sync", { method: "POST" });
+        const res = await accountFetch("/api/sync", { method: "POST" });
         const data = await res.json();
+        if (sessionRevision !== firebaseSessionRevision) return;
         
         if (data.success) {
-            showToast(data.message || "Sync completed successfully!", "success");
+            const refreshed = await loadCollection();
+            if (sessionRevision !== firebaseSessionRevision) return;
+            if (refreshed) {
+                showToast(data.message || "Sync completed successfully!", "success");
+            } else {
+                showToast("Sync completed, but the collection could not be refreshed. Try Sync again.", "error");
+            }
         } else {
             showToast(data.error || "Sync failed", "error");
         }
     } catch (e) {
+        if (sessionRevision !== firebaseSessionRevision) return;
         showToast("Sync error occurred", "error");
     } finally {
-        if (sidebarBtn) sidebarBtn.disabled = false;
-        if (settingsBtn) settingsBtn.disabled = false;
-        dot.className = "status-dot online";
-        txt.textContent = "Connected locally";
+        if (sessionRevision === firebaseSessionRevision) {
+            if (sidebarBtn) sidebarBtn.disabled = false;
+            if (settingsBtn) settingsBtn.disabled = false;
+            dot.className = "status-dot online";
+            txt.textContent = "Connected locally";
+        }
     }
 }
 
@@ -2355,7 +2585,7 @@ async function saveCoverConfig() {
     
     async function submitSettings(extraData = {}) {
         try {
-            const res = await fetch("/api/settings", {
+            const res = await accountFetch("/api/settings", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2510,7 +2740,7 @@ async function saveProfileSettings() {
     
     async function submitProfile(extraData = {}) {
         try {
-            const res = await fetch("/api/settings", {
+            const res = await accountFetch("/api/settings", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2539,7 +2769,7 @@ async function saveProfileSettings() {
         reader.onload = async function(e) {
             const base64Data = e.target.result;
             try {
-                const uploadRes = await fetch("/api/upload-profile-image", {
+                const uploadRes = await accountFetch("/api/upload-profile-image", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ image_data: base64Data })
@@ -2646,6 +2876,7 @@ async function loginFirebasePC() {
         if (errEl) { errEl.textContent = 'Email and password are required.'; errEl.classList.remove('hidden'); }
         return;
     }
+    const sessionRevision = ++firebaseSessionRevision;
     
     // Show loading state on the overlay button
     const btnText = document.getElementById('login-btn-text');
@@ -2665,6 +2896,7 @@ async function loginFirebasePC() {
         });
         
         const data = await res.json();
+        if (sessionRevision !== firebaseSessionRevision) return;
         if (data.success) {
             showToast(data.message || 'Connected to Firebase!', 'success');
             appConfig = data.config;
@@ -2676,33 +2908,71 @@ async function loginFirebasePC() {
             if (errEl) { errEl.textContent = data.error || 'Login failed. Check your credentials.'; errEl.classList.remove('hidden'); }
         }
     } catch (e) {
+        if (sessionRevision !== firebaseSessionRevision) return;
         showToast('Network error during Firebase login', 'error');
         const errEl = document.getElementById('login-error');
         if (errEl) { errEl.textContent = 'Could not reach server. Is the app running?'; errEl.classList.remove('hidden'); }
     } finally {
-        if (btnText) btnText.classList.remove('hidden');
-        if (btnSpinner) btnSpinner.classList.add('hidden');
-        if (submitBtn) submitBtn.disabled = false;
+        if (sessionRevision === firebaseSessionRevision) {
+            if (btnText) btnText.classList.remove('hidden');
+            if (btnSpinner) btnSpinner.classList.add('hidden');
+            if (submitBtn) submitBtn.disabled = false;
+        }
     }
 }
 
 async function logoutFirebasePC() {
     if (!confirm("Are you sure you want to disconnect from Firebase? This will stop cloud syncing.")) return;
+    const sessionRevision = ++firebaseSessionRevision;
     
     showToast("Disconnecting...", "info");
     
     try {
-        const res = await fetch("/api/firebase/logout", { method: "POST" });
+        const res = await accountFetch("/api/firebase/logout", { method: "POST" });
         const data = await res.json();
+        if (sessionRevision !== firebaseSessionRevision) return;
         
         if (data.success) {
             showToast(data.message || "Disconnected from Firebase", "success");
+            appConfig = data.config || appConfig;
+            updateFirebaseUI(appConfig);
             await loadSettings(); // Reload settings to update UI
+            if (sessionRevision === firebaseSessionRevision) await loadCollection();
         } else {
             showToast(data.error || "Logout failed", "error");
         }
     } catch (e) {
+        if (sessionRevision !== firebaseSessionRevision) return;
         showToast("Network error during Firebase logout", "error");
+    }
+}
+
+async function importLegacyCollection() {
+    if (!confirm("This will copy the unassigned old PC collection to the current Firebase account. Continue?")) return;
+    const sessionRevision = firebaseSessionRevision;
+    const button = document.getElementById('profile-import-legacy');
+    if (button) button.disabled = true;
+    try {
+        const res = await accountFetch('/api/firebase/import-legacy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: true })
+        });
+        const data = await res.json();
+        if (sessionRevision !== firebaseSessionRevision) return;
+        if (!data.success) {
+            showToast(data.error || 'Legacy collection import failed', 'error');
+            return;
+        }
+        appConfig = data.config || appConfig;
+        updateFirebaseUI(appConfig);
+        await loadCollection();
+        showToast(data.sync_success === false ? `${data.message} Sync failed: ${data.sync_message}` : data.message, data.sync_success === false ? 'error' : 'success');
+    } catch (e) {
+        if (sessionRevision !== firebaseSessionRevision) return;
+        showToast('Network error during legacy collection import', 'error');
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 
@@ -2715,11 +2985,14 @@ function updateFirebaseUI(config) {
     const profileStatus = document.getElementById('profile-firebase-status');
     const profileConnect = document.getElementById('profile-firebase-connect');
     const profileEmail = document.getElementById('profile-linked-email');
+    const importButton = document.getElementById('profile-import-legacy');
     if (profileStatus) {
         if (config.firebase_enabled) {
             profileStatus.classList.remove('hidden');
             profileConnect?.classList.add('hidden');
             if (profileEmail) profileEmail.textContent = config.firebase_email || 'Active User';
+            if (config.legacy_collection_available) importButton?.classList.remove('hidden');
+            else importButton?.classList.add('hidden');
         } else {
             profileStatus.classList.add('hidden');
             profileConnect?.classList.remove('hidden');

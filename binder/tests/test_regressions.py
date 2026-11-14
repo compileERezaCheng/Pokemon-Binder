@@ -12,6 +12,7 @@ import struct
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
 
@@ -252,16 +253,97 @@ class BinderApiTests(TemporaryBinderTest):
         self.httpd.server_close()
         self.thread.join(timeout=2)
 
-    def request_json(self, path, payload=None):
+    def request_json(self, path, payload=None, headers=None):
         data = None if payload is None else json.dumps(payload).encode()
         request = Request(self.base_url + path, data=data, method="GET" if payload is None else "POST")
         if data is not None:
             request.add_header("Content-Type", "application/json")
+        for name, value in (headers or {}).items():
+            request.add_header(name, value)
         try:
             with urlopen(request, timeout=2) as response:
                 return response.status, json.loads(response.read())
         except HTTPError as error:
-            return error.code, json.loads(error.read())
+            with error:
+                return error.code, json.loads(error.read())
+
+    def test_switching_accounts_uses_each_accounts_local_collection(self):
+        account_a = dict(pokemon_binder.load_config(), firebase_enabled=True, firebase_user_id="uid-A")
+        pokemon_binder.save_config(account_a)
+        pokemon_binder.save_collection([dict(card("pikachu", dex=25), **{"Copy ID": "copy-A"})])
+        synced = {}
+
+        def sign_in(config):
+            config["firebase_user_id"] = "uid-B" if config["firebase_email"].startswith("b@") else "uid-A"
+            pokemon_binder.save_config(config)
+            return True, "ok"
+
+        def sync(config, collection):
+            synced[config["firebase_user_id"]] = list(collection)
+            return True, "ok"
+
+        with patch.object(pokemon_binder, "firebase_sign_in", side_effect=sign_in), \
+                patch.object(pokemon_binder, "sync_with_firebase", side_effect=sync):
+            self.assertEqual(200, self.request_json("/api/firebase/login", {"email": "b@example.test", "password": "pw"})[0])
+            self.assertEqual(200, self.request_json("/api/firebase/login", {"email": "a@example.test", "password": "pw"})[0])
+
+        self.assertEqual([], synced["uid-B"])
+        self.assertEqual("pikachu", synced["uid-A"][0]["Name"])
+
+    def test_ambiguous_legacy_collection_requires_explicit_import_to_current_account(self):
+        config = dict(pokemon_binder.load_config(), firebase_enabled=True, firebase_auth_method="auth",
+                      firebase_user_id="uid-B", firebase_id_token="test-token", legacy_collection_owner="ambiguous")
+        pokemon_binder.save_config(config)
+        legacy = dict(card("pikachu", dex=25), **{"Copy ID": "legacy-copy"})
+        pokemon_binder.save_collection([legacy], user_id="")
+        account_header = {"X-Expected-Firebase-UID": "uid-B"}
+
+        self.assertEqual([], pokemon_binder.load_collection("uid-B"))
+        status, rejected = self.request_json("/api/firebase/import-legacy", {"confirm": False}, headers=account_header)
+        self.assertEqual(400, status, rejected)
+        self.assertEqual([], pokemon_binder.load_collection("uid-B"))
+
+        with patch.object(pokemon_binder, "sync_with_firebase", return_value=(True, "synced")) as sync:
+            status, imported = self.request_json("/api/firebase/import-legacy", {"confirm": True}, headers=account_header)
+
+        self.assertEqual(200, status, imported)
+        self.assertTrue(imported["sync_success"])
+        self.assertEqual(["legacy-copy"], [item["Copy ID"] for item in sync.call_args.args[1]])
+        self.assertEqual(["legacy-copy"], [item["Copy ID"] for item in pokemon_binder.load_collection("uid-B")])
+        self.assertTrue(Path(pokemon_binder.DATA_FILE + ".pre-explicit-import.bak").is_file())
+        self.assertTrue(Path(pokemon_binder.DATA_FILE).is_file())
+        self.assertEqual("migrated:uid-B", pokemon_binder.load_config()["legacy_collection_owner"])
+
+        status, repeated = self.request_json("/api/firebase/import-legacy", {"confirm": True}, headers=account_header)
+        self.assertEqual(409, status, repeated)
+        self.assertEqual(1, len(pokemon_binder.load_collection("uid-B")))
+
+    def test_update_and_remove_protect_the_local_read_modify_write_cycle(self):
+        _, added = self.request_json("/api/add", {"name": "Pikachu", "dex_id": 25, "page": 1, "slot": 1})
+        copy_id = added["card"]["Copy ID"]
+        original_load = pokemon_binder.load_collection
+        lock_states = []
+
+        def guarded_load(*args, **kwargs):
+            lock_states.append(pokemon_binder.COLLECTION_LOCK._is_owned())
+            return original_load(*args, **kwargs)
+
+        with patch.object(pokemon_binder, "load_collection", side_effect=guarded_load):
+            self.request_json("/api/update-card", {"copy_id": copy_id, "notes": "edited"})
+            self.request_json("/api/remove", {"page": 1, "slot": 1, "name": "pikachu", "copy_id": copy_id})
+
+        self.assertEqual([True, True], lock_states)
+
+    def test_stale_account_write_is_rejected_after_an_account_switch(self):
+        config = dict(pokemon_binder.load_config(), firebase_enabled=True, firebase_auth_method="auth",
+                      firebase_user_id="uid-B", firebase_id_token="token-B")
+        pokemon_binder.save_config(config)
+
+        status, response = self.request_json("/api/add", {"name": "Pikachu", "dex_id": 25, "page": 1, "slot": 1},
+                                             headers={"X-Expected-Firebase-UID": "uid-A"})
+
+        self.assertEqual(409, status, response)
+        self.assertEqual([], pokemon_binder.load_collection("uid-B"))
 
     def test_catalog_metadata_update_preserves_copy_data(self):
         details = json.dumps({"assessable": True, "criteria": {"centering": {"score": 8, "evidence": "even"}}})
@@ -402,20 +484,54 @@ class FirebaseSyncTests(TemporaryBinderTest):
         self.constants_patch.start()
         self.addCleanup(self.constants_patch.stop)
         self.remote = []
+        self.remote_versions = {}
         self.fail_get = False
         self.fail_put = False
+        self.fail_after_put = 0
+        self.mutate_after_get = None
 
-        def request(url, method="GET", data=None, token=None):
+        def request(url, method="GET", data=None, token=None, request_headers=None, return_etag=False):
+            def response(value=None, error=None, etag=None):
+                return (value, error, etag) if return_etag else (value, error)
+
             if url.endswith("/profile.json") or url.endswith("/username.json"):
-                return None, None
+                return response()
+            path = url.split("?", 1)[0]
             if method == "GET":
-                return (None, "offline") if self.fail_get else (list(self.remote), None)
+                if self.fail_get:
+                    return response(error="offline")
+                if path.endswith("/collection_v2.json"):
+                    return response(list(self.remote) or None)
+                if path.endswith("/collection.json"):
+                    return response()
+                copy_id = unquote(path.rsplit("/", 1)[-1][:-5])
+                current = next((item for index, item in enumerate(self.remote)
+                                if str(item.get("Copy ID") or pokemon_binder.legacy_copy_id(item, index)) == copy_id), None)
+                etag = f'"{self.remote_versions.get(copy_id, 1)}"' if current is not None else "null_etag"
+                result = dict(current) if current is not None else None
+                if self.mutate_after_get and self.mutate_after_get[0] == copy_id and current is not None:
+                    current.update(self.mutate_after_get[1])
+                    self.remote_versions[copy_id] = self.remote_versions.get(copy_id, 1) + 1
+                    self.mutate_after_get = None
+                return response(result, etag=etag)
             if method == "PUT":
                 if self.fail_put:
-                    return None, "offline"
-                self.remote = list(data)
-                return None, None
-            return None, "unexpected method"
+                    return response(error="offline")
+                copy_id = unquote(path.rsplit("/", 1)[-1][:-5])
+                current = next((item for index, item in enumerate(self.remote)
+                                if str(item.get("Copy ID") or pokemon_binder.legacy_copy_id(item, index)) == copy_id), None)
+                etag = f'"{self.remote_versions.get(copy_id, 1)}"' if current is not None else "null_etag"
+                if request_headers and request_headers.get("If-Match") != etag:
+                    return response(error="ETAG_MISMATCH", etag=etag)
+                self.remote = [item for index, item in enumerate(self.remote)
+                               if str(item.get("Copy ID") or pokemon_binder.legacy_copy_id(item, index)) != copy_id]
+                self.remote.append(dict(data))
+                self.remote_versions[copy_id] = self.remote_versions.get(copy_id, 1) + 1
+                if self.fail_after_put:
+                    self.fail_after_put -= 1
+                    return response(error="offline")
+                return response()
+            return response(error="unexpected method")
 
         self.request_patch = patch.object(pokemon_binder, "make_firebase_request", side_effect=request)
         self.request_patch.start()
@@ -438,7 +554,7 @@ class FirebaseSyncTests(TemporaryBinderTest):
         self.remote = [remote]
         ok, _ = self.sync([local])
         self.assertTrue(ok)
-        merged = pokemon_binder.load_collection()
+        merged = pokemon_binder.load_collection("test-user")
         self.assertEqual({"base1-25", "neo3-12"}, {c.get("Catalog Card ID") for c in merged})
 
     def test_first_link_unions_both_sides_and_preserves_duplicate_stacks(self):
@@ -449,28 +565,129 @@ class FirebaseSyncTests(TemporaryBinderTest):
         ok, _ = self.sync(local)
 
         self.assertTrue(ok)
-        merged = pokemon_binder.load_collection()
+        merged = pokemon_binder.load_collection("test-user")
         self.assertEqual({"pikachu", "eevee", "bulbasaur"}, {c["Name"] for c in merged})
         self.assertEqual(2, sum(c["Name"] == "pikachu" for c in merged))
 
     def test_three_way_merge_keeps_additions_and_removals_do_not_return(self):
-        pikachu, charizard = card("pikachu", dex=25), card("charizard", dex=6)
-        mew = card("mew", dex=151)
-        mew_copy = dict(mew, **{"Date Added": "second copy"})
+        pikachu = dict(card("pikachu", dex=25), **{"Copy ID": "pika-1"})
+        charizard = dict(card("charizard", dex=6), **{"Copy ID": "charizard-1"})
+        mew = dict(card("mew", dex=151), **{"Copy ID": "mew-1"})
+        mew_copy = dict(mew, **{"Copy ID": "mew-2", "Date Added": "second copy"})
         base = [pikachu, charizard, mew, mew_copy]
-        pokemon_binder.save_sync_state(base)
+        pokemon_binder.save_sync_state(base, user_id="test-user")
         local = [pikachu, mew, card("eevee", dex=133)]
         self.remote = [pikachu, charizard, mew, mew_copy, card("snorlax", dex=143)]
 
         ok, _ = self.sync(local)
         self.assertTrue(ok)
-        merged = pokemon_binder.load_collection()
+        merged = pokemon_binder.load_collection("test-user")
         self.assertEqual({"pikachu", "mew", "eevee", "snorlax"}, {c["Name"] for c in merged})
         self.assertEqual(1, sum(c["Name"] == "mew" for c in merged))
 
         ok, _ = self.sync(merged)
         self.assertTrue(ok)
-        self.assertEqual({"pikachu", "mew", "eevee", "snorlax"}, {c["Name"] for c in self.remote})
+        active, deleted = pokemon_binder._remote_cards(self.remote)
+        self.assertEqual({"pikachu", "mew", "eevee", "snorlax"}, {c["Name"] for c in active.values()})
+        self.assertIn("charizard-1", deleted)
+
+    def test_three_way_merge_preserves_remote_field_edits_and_combines_independent_fields(self):
+        base = dict(card("pikachu", dex=25), **{"Copy ID": "copy-1", "Notes": "base", "Grade": "8"})
+        pokemon_binder.save_sync_state([base], user_id="test-user")
+        local = dict(base, Notes="PC note")
+        remote = dict(base, Grade="9", Notes="base")
+        self.remote = [remote]
+
+        ok, _ = self.sync([local])
+
+        self.assertTrue(ok)
+        saved = self.remote[0]
+        self.assertEqual("PC note", saved["Notes"])
+        self.assertEqual("9", saved["Grade"])
+
+    def test_same_field_conflict_keeps_local_edit_and_saves_recovery_record(self):
+        base = dict(card("pikachu", dex=25), **{"Copy ID": "copy-1", "Notes": "base"})
+        pokemon_binder.save_sync_state([base], user_id="test-user")
+        local = dict(base, Notes="PC note")
+        self.remote = [dict(base, Notes="Android note")]
+
+        ok, message = self.sync([local])
+
+        self.assertTrue(ok)
+        self.assertEqual("PC note", self.remote[0]["Notes"])
+        self.assertIn("conflict", message.lower())
+        conflicts = json.loads((Path(pokemon_binder.account_data_path("test-user")) / "sync_conflicts.json").read_text(encoding="utf-8"))
+        self.assertEqual("Android note", conflicts[0]["remote"]["Notes"])
+
+    def test_etag_retry_merges_a_remote_edit_that_arrives_during_write(self):
+        base = dict(card("pikachu", dex=25), **{"Copy ID": "copy-1", "Notes": "base", "Grade": "8"})
+        pokemon_binder.save_sync_state([base], user_id="test-user")
+        self.remote = [dict(base)]
+        self.mutate_after_get = ("copy-1", {"Grade": "9"})
+
+        ok, _ = self.sync([dict(base, Notes="PC note")])
+
+        self.assertTrue(ok)
+        self.assertEqual("PC note", self.remote[0]["Notes"])
+        self.assertEqual("9", self.remote[0]["Grade"])
+
+    def test_retry_after_ambiguous_remote_add_does_not_duplicate_copy(self):
+        local = [dict(card("pikachu", dex=25), **{"Copy ID": "copy-1"})]
+        self.fail_after_put = 1
+
+        first_ok, _ = self.sync(local)
+        self.assertFalse(first_ok)
+        self.assertEqual(1, len(self.remote))
+
+        second_ok, _ = self.sync(local)
+
+        self.assertTrue(second_ok)
+        active, _ = pokemon_binder._remote_cards(self.remote)
+        self.assertEqual(["copy-1"], list(active))
+
+    def test_local_delete_after_remote_edit_is_reported_and_kept_as_tombstone(self):
+        base = dict(card("pikachu", dex=25), **{"Copy ID": "copy-1", "Notes": "base"})
+        pokemon_binder.save_sync_state([base], user_id="test-user")
+        self.remote = [dict(base, Notes="Android note")]
+
+        ok, message = self.sync([])
+
+        self.assertTrue(ok)
+        self.assertIn("conflict", message.lower())
+        self.assertTrue(self.remote[0]["_deleted"])
+        conflicts = json.loads((Path(pokemon_binder.account_data_path("test-user")) / "sync_conflicts.json").read_text(encoding="utf-8"))
+        self.assertEqual("Android note", conflicts[0]["remote"]["Notes"])
+
+    def test_local_save_failure_after_remote_add_can_retry_without_duplicate(self):
+        local = [dict(card("pikachu", dex=25), **{"Copy ID": "copy-1"})]
+        state_path = Path(pokemon_binder.account_data_path("test-user")) / "sync_state.json"
+        pokemon_binder.save_sync_state([], user_id="test-user")
+        real_save = pokemon_binder.save_collection
+
+        with patch.object(pokemon_binder, "save_collection", return_value=False):
+            ok, message = self.sync(local)
+
+        self.assertFalse(ok)
+        self.assertIn("local CSV could not be saved", message)
+        self.assertEqual("[]", state_path.read_text(encoding="utf-8"))
+        self.assertEqual(1, len(self.remote))
+
+        ok, _ = self.sync(local)
+
+        self.assertTrue(ok)
+        self.assertEqual(1, len(self.remote))
+
+    def test_firebase_sync_holds_the_collection_lock_during_remote_reads(self):
+        original_request = pokemon_binder.make_firebase_request
+
+        def guarded_request(*args, **kwargs):
+            self.assertTrue(pokemon_binder.COLLECTION_LOCK._is_owned())
+            return original_request(*args, **kwargs)
+
+        with patch.object(pokemon_binder, "make_firebase_request", side_effect=guarded_request):
+            ok, _ = self.sync([dict(card("pikachu", dex=25), **{"Copy ID": "copy-1"})])
+
+        self.assertTrue(ok)
 
     def test_firebase_and_sheets_failures_are_reported_without_cloud_access(self):
         original = [card("pikachu", dex=25)]
@@ -479,14 +696,17 @@ class FirebaseSyncTests(TemporaryBinderTest):
         ok, message = self.sync(original)
         self.assertFalse(ok)
         self.assertIn("Failed to retrieve Firebase data", message)
-        self.assertEqual(original, pokemon_binder.load_collection())
+        saved = pokemon_binder.load_collection()
+        self.assertEqual(original[0]["Name"], saved[0]["Name"])
+        self.assertTrue(saved[0]["Copy ID"])
 
         self.fail_get = False
         self.fail_put = True
         ok, message = self.sync(original)
         self.assertFalse(ok)
-        self.assertIn("Failed to push merged data", message)
-        self.assertEqual(original, pokemon_binder.load_collection())
+        self.assertIn("Failed to add a card", message)
+        saved = pokemon_binder.load_collection()
+        self.assertEqual(original[0]["Name"], saved[0]["Name"])
 
         with patch.object(pokemon_binder, "get_gspread_client", return_value=(None, "offline")):
             ok, message = pokemon_binder.sync_with_google_sheets({"gsheet_enabled": True}, original)
@@ -659,12 +879,29 @@ class ServerLifecycleTests(TemporaryBinderTest):
             r'Source: "dist\PokemonBinderServer\*"; DestDir: "{app}\PokemonBinderServer"; Flags: ignoreversion recursesubdirs createallsubdirs',
             installer,
         )
-        self.assertIn(r'Source: "data\pokeball.ico"; DestDir: "{app}"; Flags: ignoreversion', installer)
-        self.assertEqual(2, installer.count(r'IconFilename: "{app}\pokeball.ico"'))
+        self.assertNotIn(r'IconFilename: "{app}\pokeball.ico"', installer)
         self.assertIn(r'Name: "{autodesktop}\Pokemon Binder Manager.lnk"', installer)
         self.assertNotIn("Tasks: desktopicon", installer)
         self.assertIn(r'SetupIconFile=data\pokeball.ico', installer)
         self.assertIn(r'--icon="$PSScriptRoot\data\pokeball.ico"', build)
+        self.assertIn(r'--add-data "$PSScriptRoot\data\pokeball.ico;data"', build)
+
+    def test_windows_build_requires_and_bundles_public_firebase_client_config(self):
+        build = (BINDER_DIR / "build.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("POKEBINDER_FIREBASE_API_KEY", build)
+        self.assertIn("POKEBINDER_FIREBASE_DB_URL", build)
+        self.assertIn("firebase_client_config.json", build)
+
+    def test_bundled_firebase_client_config_is_loaded_without_user_setup(self):
+        config_path = self.data_dir / "firebase_client_config.json"
+        config_path.write_text(json.dumps({"apiKey": "test-public-key", "databaseURL": "https://test.firebaseio.com"}), encoding="utf-8")
+
+        with patch.object(pokemon_binder, "get_resource_path", return_value=str(config_path)):
+            config = pokemon_binder.load_firebase_client_config()
+
+        self.assertEqual("test-public-key", config["apiKey"])
+        self.assertEqual("https://test.firebaseio.com", config["databaseURL"])
 
     def test_windows_app_registers_a_visible_notification_area_icon(self):
         app = (BINDER_DIR / "src" / "Program.cs").read_text(encoding="utf-8")
