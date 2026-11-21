@@ -1,0 +1,92 @@
+name: Notify Release on Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Custom Embed to Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_RELEASE_ROLE_ID: ${{ vars.DISCORD_RELEASE_ROLE_ID }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          webhook = os.environ['DISCORD_WEBHOOK'].strip()
+          if not webhook:
+              raise SystemExit('Set the DISCORD_WEBHOOK repository secret to the Discord webhook URL.')
+
+          with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as event_file:
+              event = json.load(event_file)
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          role = os.environ['DISCORD_RELEASE_ROLE_ID'].strip()
+          roles = []
+
+          if os.environ['GITHUB_EVENT_NAME'] == 'release':
+              release = event['release']
+              tag = release['tag_name']
+              title = release['name'] or tag
+              url = release['html_url']
+              notes = release['body'] or 'See the release on GitHub for details.'
+              content = '🚀 **New update available!**'
+              if role:
+                  if not role.isascii() or not role.isdecimal() or len(role) > 20:
+                      raise SystemExit('DISCORD_RELEASE_ROLE_ID must be the numeric Discord role ID.')
+                  content += f' <@&{role}>'
+                  roles.append(role)
+          else:
+              tag = 'v0.0.0-test'
+              title = 'Manual Test'
+              url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}"
+              notes = 'This is a manual test dispatch to verify that the Discord Webhook is working!'
+              content = '🧪 **Test notification**'
+
+          if len(notes) > 1500:
+              notes = notes[:1500] + '...\n\n*(truncated due to length limit)*'
+
+          github_logo = 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png'
+          payload = {
+              'content': content,
+              'username': 'GitHub Release Bot',
+              'avatar_url': github_logo,
+              'allowed_mentions': {'parse': [], 'roles': roles},
+              'embeds': [{
+                  'title': f'{title} ({tag})'[:256],
+                  'url': url,
+                  'description': notes,
+                  'color': 3066993,
+                  'fields': [
+                      {'name': '📦 Repository', 'value': repository, 'inline': True},
+                      {'name': '🏷️ Tag', 'value': tag[:1024], 'inline': True},
+                  ],
+                  'footer': {'text': 'Released on GitHub', 'icon_url': github_logo},
+                  'timestamp': datetime.now(timezone.utc).isoformat(),
+              }],
+          }
+
+          request = Request(
+              f'{webhook}?wait=true',
+              data=json.dumps(payload).encode('utf-8'),
+              headers={'Content-Type': 'application/json'},
+              method='POST',
+          )
+          try:
+              with urlopen(request, timeout=30):
+                  print('Discord notification sent.')
+          except HTTPError as error:
+              raise SystemExit(f'Discord rejected the notification (HTTP {error.code}).') from None
+          except (URLError, TimeoutError, ValueError):
+              raise SystemExit('Could not reach the Discord webhook.') from None
+          PY
