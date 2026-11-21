@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published release tag. Leave blank to send a test.
+        type: string
+        required: false
 
 permissions: {}
 
@@ -21,6 +26,7 @@ jobs:
           import os
           from datetime import datetime, timezone
           from urllib.error import HTTPError, URLError
+          from urllib.parse import quote
           from urllib.request import Request, urlopen
 
           webhook = os.environ['DISCORD_WEBHOOK'].strip()
@@ -35,8 +41,27 @@ jobs:
           role = os.environ['DISCORD_RELEASE_ROLE_ID'].strip()
           roles = []
 
-          if os.environ['GITHUB_EVENT_NAME'] == 'release':
-              release = event['release']
+          release = event.get('release')
+          release_tag = (event.get('inputs') or {}).get('release_tag', '').strip()
+          if release_tag:
+              api_url = os.environ['GITHUB_API_URL']
+              release_request = Request(
+                  f"{api_url}/repos/{repository}/releases/tags/{quote(release_tag, safe='')}",
+                  headers={'Accept': 'application/vnd.github+json'},
+              )
+              try:
+                  with urlopen(release_request, timeout=30) as response:
+                      release = json.load(response)
+              except HTTPError as error:
+                  if error.code == 404:
+                      raise SystemExit('No published release found for that tag.') from None
+                  raise SystemExit(f'GitHub rejected the release lookup (HTTP {error.code}).') from None
+              except (URLError, TimeoutError):
+                  raise SystemExit('Could not look up the release on GitHub.') from None
+              if release.get('draft'):
+                  raise SystemExit('Publish the release on GitHub before announcing it.')
+
+          if release is not None:
               tag = release['tag_name']
               title = release['name'] or tag
               url = release['html_url']
