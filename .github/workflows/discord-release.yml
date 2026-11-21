@@ -31,6 +31,7 @@ jobs:
               event = json.load(event_file)
 
           repository = os.environ['GITHUB_REPOSITORY']
+          repository_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}"
           role = os.environ['DISCORD_RELEASE_ROLE_ID'].strip()
           roles = []
 
@@ -49,7 +50,7 @@ jobs:
           else:
               tag = 'v0.0.0-test'
               title = 'Manual Test'
-              url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}"
+              url = repository_url
               notes = 'This is a manual test dispatch to verify that the Discord Webhook is working!'
               content = '🧪 **Test notification**'
 
@@ -79,7 +80,10 @@ jobs:
           request = Request(
               f'{webhook}?wait=true',
               data=json.dumps(payload).encode('utf-8'),
-              headers={'Content-Type': 'application/json'},
+              headers={
+                  'Content-Type': 'application/json',
+                  'User-Agent': f'DiscordBot ({repository_url}, 1.0)',
+              },
               method='POST',
           )
           try:
