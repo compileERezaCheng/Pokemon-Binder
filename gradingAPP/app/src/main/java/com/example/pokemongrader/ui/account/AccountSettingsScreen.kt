@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,12 +40,16 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.pokemongrader.data.DataRepository
+import com.example.pokemongrader.data.PersonalGeminiSession
 import com.example.pokemongrader.ui.main.ProfileImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -571,7 +576,9 @@ fun AccountSettingsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+            repository.personalGemini?.let { PersonalGeminiSettings(it) }
+            Spacer(modifier = Modifier.height(24.dp))
 
             Button(
                 onClick = { showLogoutConfirm = true },
@@ -608,6 +615,99 @@ fun AccountSettingsScreen(
             containerColor = Color(0xFF0F172A),
             titleContentColor = Color.White,
             textContentColor = Color.LightGray
+        )
+    }
+}
+
+@Composable
+internal fun PersonalGeminiSettings(session: PersonalGeminiSession) {
+    val personalClient by session.client.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var showKeyDialog by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    var actionError by remember { mutableStateOf("") }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Gemini scanner (optional)", fontWeight = FontWeight.Bold)
+        Text(
+            if (personalClient != null) "Your key is saved on this device."
+            else "Use your own Gemini API key to scan cards.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedButton(
+            enabled = !working,
+            onClick = { actionError = ""; showKeyDialog = true }
+        ) {
+            Text(if (personalClient != null) "Replace my Gemini key" else "Use my Gemini key")
+        }
+        if (personalClient != null) {
+            TextButton(enabled = !working, onClick = {
+                working = true
+                actionError = ""
+                scope.launch {
+                    try {
+                        session.remove()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        actionError = "Couldn't remove the Gemini key. Try again."
+                    } finally {
+                        working = false
+                    }
+                }
+            }) { Text("Remove my Gemini key") }
+        }
+        if (actionError.isNotEmpty() && !showKeyDialog) Text(actionError, color = MaterialTheme.colorScheme.error)
+    }
+
+    if (showKeyDialog) {
+        var key by remember { mutableStateOf("") }
+        var invalid by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { if (!working) showKeyDialog = false },
+            title = { Text("Use my Gemini key") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Use an API key from your own Google AI Studio project with billing enabled.")
+                    Text("Card photos go directly to Google. Your project may be charged. The key is saved on this device for this PokeBinder account.")
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = { key = it; invalid = false; actionError = "" },
+                        label = { Text("Gemini API key") },
+                        singleLine = true,
+                        enabled = !working,
+                        isError = invalid,
+                        supportingText = { if (invalid) Text("Enter a valid Gemini API key.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (actionError.isNotEmpty()) Text(actionError, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = key.isNotBlank() && !working,
+                    onClick = {
+                        working = true
+                        scope.launch {
+                            try {
+                                if (session.activate(key)) {
+                                    key = ""
+                                    showKeyDialog = false
+                                } else invalid = true
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                actionError = "Couldn't save the Gemini key securely. Try again."
+                            } finally {
+                                working = false
+                            }
+                        }
+                    }
+                ) { Text("Save Gemini key") }
+            },
+            dismissButton = { TextButton(enabled = !working, onClick = { showKeyDialog = false }) { Text("Cancel") } }
         )
     }
 }

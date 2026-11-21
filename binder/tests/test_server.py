@@ -109,6 +109,101 @@ class LocalServerTest(unittest.TestCase):
         finally:
             self.module.FRONTEND_DIR = previous
 
+    def test_add_preserves_printed_name_and_locale_identity(self):
+        self.cards.clear()
+        self.addCleanup(self.cards.clear)
+        status, content = self.request('POST', '/api/add', {
+            'name': 'Hisuian Zorua', 'species_name': 'Zorua', 'form': 'Hisuian',
+            'dex_id': 570, 'card_language': 'ja', 'catalog_provider': 'TCGdex',
+            'catalog_locale': 'ja', 'catalog_card_id': 'sv10-1',
+            'set_id': 'sv10', 'set_name': 'Black Bolt', 'card_number': '1',
+            'catalog_variant': 'normal', 'type': 'Mega Hyper Rare',
+            'page': 64, 'slot': 3, 'condition': 'NM', 'notes': 'fixture',
+        })
+        self.assertEqual(status, 200, content)
+        saved = json.loads(content)['card']
+        self.assertEqual('Hisuian Zorua', saved['Name'])
+        self.assertEqual(570, saved['Dex Number'])
+        self.assertEqual('Zorua', saved['Species Name'])
+        self.assertEqual('Hisuian', saved['Form'])
+        self.assertEqual('ja', saved['Card Language'])
+        self.assertEqual('TCGdex', saved['Catalog Provider'])
+        self.assertEqual('ja', saved['Catalog Locale'])
+        self.assertEqual('sv10-1', saved['Catalog Card ID'])
+        self.assertEqual('normal', saved['Catalog Variant'])
+        self.assertEqual('Mega Hyper Rare', saved['Type'])
+
+    def test_identity_edit_clears_the_previous_printing_and_art(self):
+        self.cards.clear()
+        self.addCleanup(self.cards.clear)
+        status, content = self.request('POST', '/api/add', {
+            'name': 'Hisuian Zorua', 'species_name': 'Zorua', 'form': 'Hisuian',
+            'dex_id': 570, 'card_language': 'en', 'catalog_provider': 'TCGdex',
+            'catalog_locale': 'en', 'catalog_card_id': 'swsh11-147', 'set_id': 'swsh11',
+            'set_name': 'Lost Origin', 'card_number': '147', 'catalog_variant': 'normal',
+            'catalog_rarity': 'Rare', 'image_url': 'https://assets.tcgdex.net/en/swsh/swsh11/147/low.webp',
+            'page': 64, 'slot': 3, 'condition': 'NM', 'notes': 'keep me',
+        })
+        self.assertEqual(200, status, content)
+        original = json.loads(content)['card']
+
+        status, content = self.request('POST', '/api/update-card', {
+            'copy_id': original['Copy ID'], 'name': 'Alolan Raichu', 'species_name': 'Raichu',
+            'form': 'Alolan', 'dex_id': 26, 'card_language': 'ja',
+        })
+        self.assertEqual(200, status, content)
+        saved = json.loads(content)['card']
+
+        self.assertEqual('Alolan Raichu', saved['Name'])
+        self.assertEqual('Raichu', saved['Species Name'])
+        self.assertEqual('Alolan', saved['Form'])
+        self.assertEqual('ja', saved['Card Language'])
+        self.assertEqual(original['Copy ID'], saved['Copy ID'])
+        self.assertEqual('keep me', saved['Notes'])
+        for field in ('Catalog Provider', 'Catalog Locale', 'Catalog Card ID', 'Set ID', 'Set Name',
+                      'Card Number', 'Catalog Variant', 'Catalog Rarity', 'Image URL', 'Image Source', 'Image Match ID'):
+            self.assertEqual('', saved.get(field, ''), field)
+
+    def test_non_english_catalog_does_not_use_english_scrydex_fallback(self):
+        calls = []
+        original = self.module.resolve_scrydex_image
+        self.module.resolve_scrydex_image = lambda *args, **kwargs: calls.append((args, kwargs)) or {'card_id': 'english-id'}
+        try:
+            status, content = self.request('POST', '/api/catalog-image-fallback', {
+                'tcgdex_card_id': 'same-id', 'catalog_provider': 'TCGdex', 'catalog_locale': 'ja'
+            })
+        finally:
+            self.module.resolve_scrydex_image = original
+        self.assertEqual(status, 200, content)
+        self.assertEqual([], calls)
+        self.assertIsNone(json.loads(content)['match'])
+
+    def test_catalog_card_id_requires_its_provider_and_locale(self):
+        self.cards.clear()
+        self.addCleanup(self.cards.clear)
+        status, content = self.request('POST', '/api/add', {
+            'name': 'Pikachu', 'dex_id': 25, 'catalog_card_id': 'same-id', 'set_id': 'set',
+            'set_name': 'Set', 'card_number': '1', 'page': 1, 'slot': 1
+        })
+        self.assertEqual(400, status, content)
+        self.assertFalse(self.cards)
+
+    def test_manual_entry_keeps_printed_set_and_number_without_catalog(self):
+        self.cards.clear()
+        self.addCleanup(self.cards.clear)
+        status, content = self.request('POST', '/api/add', {
+            'name': 'リザードン', 'species_name': 'Charizard', 'card_language': 'Japanese',
+            'set_name': 'Starter Deck', 'card_number': '3', 'catalog_rarity': 'Rare',
+            'page': 1, 'slot': 1,
+        })
+        self.assertEqual(200, status, content)
+        saved = json.loads(content)['card']
+        self.assertEqual('', saved['Catalog Card ID'])
+        self.assertEqual('Japanese', saved['Card Language'])
+        self.assertEqual('Starter Deck', saved['Set Name'])
+        self.assertEqual('3', saved['Card Number'])
+        self.assertEqual('Rare', saved['Catalog Rarity'])
+
 
 if __name__ == '__main__':
     unittest.main()

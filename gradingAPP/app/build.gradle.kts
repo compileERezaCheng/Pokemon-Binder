@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.pokemongrader"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
 
         val secrets = Properties()
         val secretsFile = project.rootProject.file("secrets.properties")

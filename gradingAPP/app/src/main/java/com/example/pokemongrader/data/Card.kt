@@ -3,6 +3,7 @@ package com.example.pokemongrader.data
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 
 data class Card(
@@ -24,7 +25,13 @@ data class Card(
     val gradeDetails: String = "",
     val imageSource: String = "",
     val imageMatchId: String = "",
-    val copyId: String = UUID.randomUUID().toString()
+    val copyId: String = UUID.randomUUID().toString(),
+    val speciesName: String = "",
+    val form: String = "",
+    val cardLanguage: String = "",
+    val catalogProvider: String = "",
+    val catalogLocale: String = "",
+    val catalogVariant: String = ""
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -47,11 +54,20 @@ data class Card(
             if (imageSource.isNotEmpty()) put("Image Source", imageSource)
             if (imageMatchId.isNotEmpty()) put("Image Match ID", imageMatchId)
             if (copyId.isNotEmpty()) put("Copy ID", copyId)
+            if (speciesName.isNotEmpty()) put("Species Name", speciesName)
+            if (form.isNotEmpty()) put("Form", form)
+            if (cardLanguage.isNotEmpty()) put("Card Language", cardLanguage)
+            if (catalogProvider.isNotEmpty()) put("Catalog Provider", catalogProvider)
+            if (catalogLocale.isNotEmpty()) put("Catalog Locale", catalogLocale)
+            if (catalogVariant.isNotEmpty()) put("Catalog Variant", catalogVariant)
         }
     }
 
     companion object {
         fun fromJsonObject(obj: JSONObject, copyIdFallback: String = UUID.randomUUID().toString()): Card {
+            val catalogCardId = obj.optString("Catalog Card ID", "")
+            val catalogProvider = obj.optString("Catalog Provider", "").ifBlank { if (catalogCardId.isNotBlank()) "TCGdex" else "" }
+            val catalogLocale = obj.optString("Catalog Locale", "").ifBlank { if (catalogCardId.isNotBlank() && catalogProvider == "TCGdex") "en" else "" }
             return Card(
                 page = obj.optInt("Page", 1),
                 slot = obj.optInt("Slot", 1),
@@ -63,7 +79,7 @@ data class Card(
                 dateAdded = obj.optString("Date Added", ""),
                 grade = obj.optDouble("Grade", 0.0),
                 imageUrl = obj.optString("Image URL", ""),
-                catalogCardId = obj.optString("Catalog Card ID", ""),
+                catalogCardId = catalogCardId,
                 setId = obj.optString("Set ID", ""),
                 setName = obj.optString("Set Name", ""),
                 cardNumber = obj.optString("Card Number", ""),
@@ -71,7 +87,13 @@ data class Card(
                 gradeDetails = obj.optString("Grade Details", ""),
                 imageSource = obj.optString("Image Source", ""),
                 imageMatchId = obj.optString("Image Match ID", ""),
-                copyId = obj.optString("Copy ID", "").ifBlank { copyIdFallback }
+                copyId = obj.optString("Copy ID", "").ifBlank { copyIdFallback },
+                speciesName = obj.optString("Species Name", ""),
+                form = obj.optString("Form", ""),
+                cardLanguage = obj.optString("Card Language", ""),
+                catalogProvider = catalogProvider,
+                catalogLocale = catalogLocale,
+                catalogVariant = obj.optString("Catalog Variant", "")
             )
         }
 
@@ -115,4 +137,14 @@ data class Card(
             return "legacy-${hash.take(32)}"
         }
     }
+}
+
+fun Card.printIdentityKey(): String {
+    val parts = if (catalogCardId.isNotBlank() && catalogProvider == "TCGdex" && catalogLocale.isNotBlank() && cardLanguage.isNotBlank()) {
+        listOf(catalogProvider, catalogLocale, catalogCardId, setId, cardNumber, catalogVariant, speciesName, form, cardLanguage)
+    } else {
+        listOf(dexNumber.toString(), name, speciesName, form, cardLanguage, catalogVariant, type) +
+            if (cardLanguage.isBlank() || catalogCardId.isNotBlank() && catalogLocale.isBlank()) listOf(copyId) else emptyList()
+    }
+    return parts.joinToString("\u0000") { it.trim().lowercase(Locale.ROOT) }
 }

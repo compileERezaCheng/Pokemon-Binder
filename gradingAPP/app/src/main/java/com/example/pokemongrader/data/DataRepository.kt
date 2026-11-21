@@ -15,6 +15,7 @@ interface DataRepository {
     val cards: StateFlow<List<Card>>
     val isLoading: StateFlow<Boolean>
     val errorMessage: StateFlow<String?>
+    val personalGemini: PersonalGeminiSession? get() = null
     
     // User profile sync states
     val username: StateFlow<String>
@@ -42,6 +43,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
     private val prefs: SharedPreferences = context.getSharedPreferences("PokeGraderPrefs", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(Dispatchers.Main)
     private var sessionRevision = 0L
+    override val personalGemini = PersonalGeminiSession(AndroidGeminiKeyStore(context))
 
     private val _isLoggedIn = MutableStateFlow(false)
     override val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
@@ -87,6 +89,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         if (uid.isNotEmpty()) loadCachedProfile(uid)
         val refreshToken = prefs.getString("refresh_token", "")
         if (!refreshToken.isNullOrEmpty()) {
+            restoreGeminiKey(uid)
             _isLoggedIn.value = true
             // Silently refresh the idToken then fetch — fixes the "must logout/login" bug
             scope.launch { refreshAndFetch() }
@@ -99,6 +102,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
     private fun profileKey(uid: String, field: String) = "profile:$uid:$field"
 
     private fun clearVisibleAccount() {
+        personalGemini.selectAccount(null)
         _isLoggedIn.value = false
         _cards.value = emptyList()
         _isLoading.value = false
@@ -116,6 +120,11 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
         _profileFeaturedDex.value = prefs.getInt(profileKey(uid, "profile_featured_dex"), 25)
         _profileImageUrl.value = prefs.getString(profileKey(uid, "profile_image_url"), "") ?: ""
         _profileImageBase64.value = prefs.getString(profileKey(uid, "profile_image_base64"), "") ?: ""
+    }
+
+    private fun restoreGeminiKey(uid: String) {
+        personalGemini.selectAccount(uid)
+        scope.launch { personalGemini.restore() }
     }
 
     private fun cacheProfile(uid: String, username: String, source: String, dex: Int, url: String, base64: String) {
@@ -184,6 +193,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
                 .putString("uid", result.uid)
                 .putString("refresh_token", result.refreshToken)
                 .apply()
+            restoreGeminiKey(result.uid)
             _isLoggedIn.value = true
             loadCachedProfile(result.uid)
             fetchRemoteFor(revision, result.uid, result.idToken)
@@ -206,6 +216,7 @@ class DefaultDataRepository(private val context: Context) : DataRepository {
                 .putString("uid", result.uid)
                 .putString("refresh_token", result.refreshToken)
                 .apply()
+            restoreGeminiKey(result.uid)
             _isLoggedIn.value = true
             loadCachedProfile(result.uid)
             fetchRemoteFor(revision, result.uid, result.idToken)

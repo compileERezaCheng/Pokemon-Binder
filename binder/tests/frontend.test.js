@@ -416,14 +416,27 @@ function loadInteractiveApp(fetchOverride) {
         'common-card': { id: 'common-card', name: 'Pikachu', set: { id: 'promo', name: 'Promo' }, localId: '1', rarity: 'Common', image: '' }
     };
     const defaultFetch = async (url, options = {}) => {
+        if (String(url).startsWith('https://pokeapi.co/api/v2/pokemon-species/')) {
+            const id = Number(String(url).match(/pokemon-species\/(\d+)/)?.[1]);
+            const names = {
+                6: [{ name: 'Charizard', language: { name: 'en' } }, { name: 'リザードン', language: { name: 'ja' } }, { name: 'Dracaufeu', language: { name: 'fr' } }],
+                25: [{ name: 'Pikachu', language: { name: 'en' } }, { name: 'ピカチュウ', language: { name: 'ja' } }],
+                570: [{ name: 'Zorua', language: { name: 'en' } }]
+            };
+            return jsonResponse({ names: names[id] || [] });
+        }
         if (url === '/api/pokemon-db') return jsonResponse({ pecharunt: { id: 1025 }, '1025': { name: 'pecharunt' } });
         if (String(url).startsWith('/api/suggest-position')) return jsonResponse({ page: 2, slot: 3, position_type: 'Dex Order' });
         if (String(url).includes('/cards?name=')) {
             const name = decodeURIComponent(String(url).split('name=')[1]);
-            return jsonResponse(name === 'pikachu' ? [
+            const locale = String(url).match(/\/v2\/([^/]+)\/cards\?/)?.[1];
+            if (['pikachu', 'Pikachu', 'ピカチュウ'].includes(name)) return jsonResponse(locale === 'ja' ? [
+                { id: 'sv2a-025', name: 'ピカチュウ', localId: '025', image: 'https://assets.tcgdex.net/ja/sv/sv2a/025' }
+            ] : [
                 { id: 'neo3-12', name: 'Pikachu', localId: '12', image: 'https://assets.tcgdex.net/en/neo/neo3/12' },
                 { id: 'base1-25', name: 'Pikachu', localId: '25', image: 'https://assets.tcgdex.net/en/base/base1/25' }
-            ] : []);
+            ]);
+            return jsonResponse([]);
         }
         if (String(url).endsWith('/sets')) return jsonResponse([{ id: 'base1', name: 'Base' }, { id: 'neo3', name: 'Neo Revelation' }]);
         const cardId = String(url).split('/cards/')[1];
@@ -453,6 +466,8 @@ globalThis.api = {
     runMarketSearch: () => { scheduleMarketSearch(); clearTimeout(marketTimer); return searchMarket(marketLatest.revision); },
     loadMoreMarket,
     searchCatalogCards, chooseCatalogCard, filterCatalogOptions, clearAddCatalogCard, resetAddCardForm, submitAddCard,
+    invalidateAddIdentity, changeCatalogLocale, addCatalogQuery, isPokemonCardNameMatch,
+    openMarketForCard, closeCardModal,
     selectPokemonCustom, updatePreviewRarity, loadPokemonDb, handleAutocomplete,
     importLegacyCollection: () => importLegacyCollection(),
     loginFirebasePC: () => loginFirebasePC(),
@@ -465,7 +480,16 @@ globalThis.api = {
         renderCollectionTable = () => renderTable(collection);
     },
     setPokemon: pokemon => { selectedPokemon = pokemon; },
-    state: () => ({ selectedPokemon, selectedCatalogCard, modalSelectedCatalogCard, modalSavedCatalogCard: typeof modalSavedCatalogCard === "undefined" ? null : modalSavedCatalogCard }),
+    setPokemonList: pokemon => { pokemonLookupList = pokemon; },
+    setCatalogCardForTest: card => { selectedCatalogCard = card; },
+    setModalCardForTest: card => {
+        modalActiveCard = card;
+        document.getElementById('card-modal').classList.remove('hidden');
+    },
+    setPendingModalCardForTest: card => { modalSelectedCatalogCard = card; },
+    state: () => ({ selectedPokemon, selectedCatalogCard, modalSelectedCatalogCard, modalSavedCatalogCard: typeof modalSavedCatalogCard === "undefined" ? null : modalSavedCatalogCard, marketSelected }),
+    activeTab: () => activeTab,
+    modalOpen: () => !document.getElementById('card-modal').classList.contains('hidden'),
     catalogImageUrl: typeof catalogImageUrl === "function" ? catalogImageUrl : null,
     resolveCatalogImageUrl: typeof resolveCatalogImageUrl === "function" ? resolveCatalogImageUrl : null,
     resolveCatalogImageFallback: typeof resolveCatalogImageFallback === "function" ? resolveCatalogImageFallback : null,
@@ -528,6 +552,17 @@ test('search, filters, sorting, and repeated-card toggle preserve binder list be
         searchVal: 'edition', condVal: 'LP', typeFilterVal: 'Holofoil Rare', sortBy: 'rarity', showRepeated: true
     });
     assert.deepEqual(Array.from(byRarity, card => card.Name), ['Pikachu']);
+
+    const printings = [
+        { Name: 'Pikachu', 'Species Name': 'Pikachu', 'Dex Number': 25, 'Card Language': 'English', 'Catalog Provider': 'TCGdex', 'Catalog Locale': 'en', 'Catalog Card ID': 'base1-25', 'Set ID': 'base1', 'Card Number': '25', 'Catalog Variant': 'Holo', Form: '' },
+        { Name: 'Pikachu', 'Species Name': 'Pikachu', 'Dex Number': 25, 'Card Language': 'English', 'Catalog Provider': 'TCGdex', 'Catalog Locale': 'en', 'Catalog Card ID': 'base1-25', 'Set ID': 'base1', 'Card Number': '25', 'Catalog Variant': 'Holo', Form: '' },
+        { Name: 'ピカチュウ', 'Species Name': 'Pikachu', 'Dex Number': 25, 'Card Language': 'Japanese', 'Catalog Provider': 'TCGdex', 'Catalog Locale': 'ja', 'Catalog Card ID': 'sv2a-025', 'Set ID': 'sv2a', 'Card Number': '025', 'Catalog Variant': '', Form: '' },
+        { Name: 'Hisuian Zorua', 'Species Name': 'Zorua', 'Dex Number': 570, 'Card Language': 'English', 'Catalog Provider': 'TCGdex', 'Catalog Locale': 'en', 'Catalog Card ID': 'swsh11-147', 'Set ID': 'swsh11', 'Card Number': '147', 'Catalog Variant': '', Form: 'Hisuian' }
+    ];
+    assert.equal(api.filterCollectionCards(printings, { sortBy: 'dex' }).length, 3);
+    assert.equal(api.filterCollectionCards(printings, { sortBy: 'dex', showRepeated: true }).length, 4);
+    assert.equal(api.filterCollectionCards(printings, { searchVal: 'Hisuian', sortBy: 'dex' })[0].Name, 'Hisuian Zorua');
+    assert.equal(api.filterCollectionCards(printings, { searchVal: 'Japanese', sortBy: 'dex' })[0].Name, 'ピカチュウ');
 });
 
 test('binder navigation clamps the first spread and maps entered pages to their spread', () => {
@@ -685,7 +720,7 @@ test('printing candidates stay selectable, and clearing a print preserves the Po
     assert.equal(app.api.state().selectedCatalogCard.id, 'neo3-12');
     await app.api.submitAddCard();
     const saved = JSON.parse(app.requests.findLast(request => request.url === '/api/add').options.body);
-    assert.deepEqual([saved.name, saved.page, saved.slot, saved.condition, saved.notes, saved.set_id], ["pikachu", 4, 7, "LP", "keep these notes", "neo3"]);
+    assert.deepEqual([saved.name, saved.page, saved.slot, saved.condition, saved.notes, saved.set_id], ["Pikachu", 4, 7, "LP", "keep these notes", "neo3"]);
 });
 
 test('clear printing selection invalidates an in-flight card detail request', async () => {
@@ -727,6 +762,10 @@ test('catalog image URLs use documented card sizes and only exact printing paths
     assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/136/high.png', 'high'),
         'https://assets.tcgdex.net/en/swsh/swsh3/136/high.png');
     assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/logo', 'high'), '');
+    assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/en/swsh/swsh3/136', 'low', 'ja'), '');
+    assert.equal(api.catalogImageUrl('https://assets.tcgdex.net/ja/sv/sv2a/25', 'low', 'ja'),
+        'https://assets.tcgdex.net/ja/sv/sv2a/25/low.webp');
+    assert.equal(api.catalogImageUrl('https://images.scrydex.com/pokemon/card-id/large', 'high', 'ja'), '');
     assert.equal(api.resolveCatalogImageUrl({ id: 'mep-027', localId: '027', set: { id: 'mep' } }, {
         mep: { seriesId: 'me' }
     }), 'https://assets.tcgdex.net/en/me/mep/027/low.webp');
@@ -840,8 +879,9 @@ test('missing TCGdex art resolves once to the cached Scrydex association', async
         return fallback(url, options);
     });
 
-    const first = await app.api.resolveCatalogImageFallback({ id: 'base1-25' });
-    const second = await app.api.resolveCatalogImageFallback({ id: 'base1-25' });
+    const printing = { id: 'base1-25', provider: 'TCGdex', locale: 'en' };
+    const first = await app.api.resolveCatalogImageFallback(printing);
+    const second = await app.api.resolveCatalogImageFallback(printing);
 
     assert.equal(first.imageSource, 'Scrydex');
     assert.equal(first.imageMatchId, 'scrydex-base1-25');
@@ -913,12 +953,12 @@ test('a prior Pokémon response cannot overwrite a newly selected or cleared for
     waitingForDetails = deferred();
     const pending = app.elements.get('add-set-options').children[0].click();
     app.api.selectPokemonCustom('Charmander');
-    assert.equal(app.api.state().selectedPokemon.name, 'charmander');
+    assert.equal(app.api.state().selectedPokemon.name, 'Charmander');
     waitingForDetails.resolve(app.jsonResponse({
         id: 'base1-25', name: 'Pikachu', set: { id: 'base1', name: 'Base' }, localId: '25', rarity: 'Rare', image: ''
     }));
     await pending;
-    assert.equal(app.api.state().selectedPokemon.name, 'charmander');
+    assert.equal(app.api.state().selectedPokemon.name, 'Charmander');
     assert.equal(app.api.state().selectedCatalogCard, null);
 
     app.api.setPokemon({ name: 'pikachu', id: 25 });
@@ -953,4 +993,318 @@ test('PokéBinder branding uses Pikachu artwork in the page header and login vie
     assert.equal((html.match(/src="\/pokemon\.png\?v=1"/g) || []).length, 2);
     assert.doesNotMatch(html, /class="pokeball-svg"/);
     assert.match(server, /elif path == '\/pokemon\.png':/);
+});
+
+test('market client requests the selected catalog locale', async () => {
+    const { MarketClient } = require('../frontend/market.js');
+    const urls = [];
+    const client = new MarketClient(async url => {
+        urls.push(url);
+        return { ok: true, json: async () => ({}) };
+    }, () => 1, 'ja');
+
+    await client.get('cards/same-id');
+
+    assert.deepEqual(urls, ['https://api.tcgdex.net/v2/ja/cards/same-id']);
+});
+
+test('market cache keeps the same card ID separate across catalog locales', async () => {
+    const { MarketClient } = require('../frontend/market.js');
+    const urls = [];
+    const client = new MarketClient(async url => {
+        urls.push(url);
+        return { ok: true, json: async () => ({ locale: url.includes('/ja/') ? 'ja' : 'en' }) };
+    }, () => 1, 'ja');
+
+    const japanese = await client.get('cards/same-id');
+    const english = await client.get('cards/same-id', false, 'en');
+
+    assert.equal(japanese.data.locale, 'ja');
+    assert.equal(english.data.locale, 'en');
+    assert.deepEqual(urls, [
+        'https://api.tcgdex.net/v2/ja/cards/same-id',
+        'https://api.tcgdex.net/v2/en/cards/same-id'
+    ]);
+});
+
+test('desktop catalog search uses the selected locale for cards and sets', async () => {
+    const app = loadInteractiveApp();
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+    app.api.setPokemon({ name: 'pikachu', id: 25 });
+    app.document.getElementById('add-search-input').value = 'Pikachu';
+
+    await app.api.searchCatalogCards('pikachu', 'add-set-options', app.api.revisions().add);
+
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url) === 'https://api.tcgdex.net/v2/ja/cards?name=ピカチュウ'));
+    assert.ok(app.requests.some(request => request.url === 'https://api.tcgdex.net/v2/ja/sets'));
+    assert.equal(app.requests.some(request => request.url.includes('/api/catalog-image-fallback')), false);
+});
+
+test('changing physical card language preserves the selected printing and current results', async () => {
+    const app = loadInteractiveApp();
+    app.api.setPokemon({ name: 'pikachu', id: 25 });
+    app.document.getElementById('add-catalog-locale').value = 'en';
+    await app.api.searchCatalogCards('pikachu', 'add-set-options', app.api.revisions().add);
+    app.api.setCatalogCardForTest({ id: 'base1-25', locale: 'en', setId: 'base1', number: '25' });
+
+    const selectedId = app.api.state().selectedCatalogCard.id;
+    const resultIds = app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId);
+    assert.equal(resultIds.length, 2);
+    const requestCount = app.requests.length;
+    const languageField = html.match(/<input\b[^>]*id="add-card-language"[^>]*>/)?.[0] || '';
+    assert.doesNotMatch(languageField, /oninput=/);
+    app.document.getElementById('add-card-language').value = 'Japanese';
+
+    assert.equal(app.api.state().selectedCatalogCard.id, selectedId);
+    assert.deepEqual(app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId), resultIds);
+    assert.equal(app.requests.length, requestCount);
+    assert.equal(app.document.getElementById('add-catalog-locale').value, 'en');
+});
+
+test('English Pikachu resolves to Japanese before searching Japanese printings', async () => {
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === 'https://pokeapi.co/api/v2/pokemon-species/25/') return app.jsonResponse({
+            names: [{ name: 'ピカチュウ', language: { name: 'ja' } }]
+        });
+        if (String(url).startsWith('https://api.tcgdex.net/v2/ja/cards?name=')) return app.jsonResponse([
+            { id: 'sv2a-25', name: 'ピカチュウ', localId: '25', image: 'https://assets.tcgdex.net/ja/sv/sv2a/25' }
+        ]);
+        if (String(url) === 'https://api.tcgdex.net/v2/ja/sets') return app.jsonResponse([
+            { id: 'sv2a', name: 'Pokémon Card 151' }
+        ]);
+        return fallback(url, options);
+    });
+    app.api.setPokemon({ name: 'pikachu', id: 25 });
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+
+    await app.api.searchCatalogCards('pikachu', 'add-set-options', app.api.revisions().add);
+
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url).includes('cards?name=ピカチュウ')));
+    assert.equal(app.elements.get('add-set-options').children.length, 1);
+    assert.equal(app.elements.get('add-set-options').children[0].dataset.catalogCardId, 'sv2a-25');
+});
+
+test('catalog name matching preserves Japanese characters', () => {
+    assert.equal(loadApp().isPokemonCardNameMatch('ピカチュウ', 'ピカチュウ'), true);
+});
+
+test('Ver preços closes Details and opens the saved locale and exact printing', async () => {
+    const japanesePrinting = {
+        id: 'sv2a-25', name: 'ピカチュウ', localId: '25',
+        set: { id: 'sv2a', name: 'Pokémon Card 151' }, image: 'https://assets.tcgdex.net/ja/sv/sv2a/25', pricing: null
+    };
+    const app = loadInteractiveApp((url, options, fallback) =>
+        url === 'https://api.tcgdex.net/v2/ja/cards/sv2a-25' ? app.jsonResponse(japanesePrinting) : fallback(url, options));
+    app.api.setModalCardForTest({
+        Name: 'ピカチュウ', 'Species Name': 'Pikachu', 'Card Language': 'English',
+        'Catalog Provider': 'TCGdex', 'Catalog Locale': 'ja', 'Catalog Card ID': 'sv2a-25',
+        'Set ID': 'sv2a', 'Set Name': 'Pokémon Card 151', 'Card Number': '25',
+        'Copy ID': 'saved-copy', Page: 2, Slot: 3, Notes: 'Keep this note'
+    });
+    app.api.setPendingModalCardForTest({ id: 'base1-25', locale: 'en', setId: 'base1', number: '25' });
+
+    await app.api.openMarketForCard();
+
+    assert.equal(app.api.modalOpen(), false);
+    assert.equal(app.api.activeTab(), 'market');
+    assert.equal(app.document.getElementById('market-locale').value, 'ja');
+    assert.equal(app.document.getElementById('market-name').value, 'ピカチュウ');
+    assert.equal(app.document.getElementById('market-set').value, 'sv2a');
+    assert.equal(app.document.getElementById('market-number').value, '25');
+    assert.ok(app.requests.some(request => request.url === 'https://api.tcgdex.net/v2/ja/cards/sv2a-25'));
+    assert.equal(app.requests.some(request => request.url.includes('/v2/en/cards/')), false);
+    assert.equal(app.api.state().modalSelectedCatalogCard, null);
+    assert.equal(app.document.getElementById('market-card-name').textContent, 'ピカチュウ');
+    assert.match(app.document.getElementById('market-detail-status').textContent, /no quote/i);
+});
+
+test('Add Pokémon exposes only Pokémon, Form and physical language for identification', () => {
+    const form = html.match(/<select\b[^>]*id="add-form"[^>]*>[\s\S]*?<\/select>/)?.[0] || '';
+    const language = html.match(/<select\b[^>]*id="add-card-language"[^>]*>[\s\S]*?<\/select>/)?.[0] || '';
+    assert.match(html, /<label for="add-search-input">Pokémon<\/label>/);
+    assert.match(form, /<option value="Normal" selected>/);
+    assert.match(form, /Alolan[\s\S]*Galarian[\s\S]*Hisuian[\s\S]*Paldean/);
+    assert.match(language, /Unknown/);
+    assert.doesNotMatch(html, /id="add-species-name"|id="add-catalog-variant"/);
+    assert.match(html, /id="add-catalog-locale"/);
+});
+
+test('localized names resolve per catalog locale and are reused from cache', async () => {
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === 'https://pokeapi.co/api/v2/pokemon-species/6/') return app.jsonResponse({ names: [
+            { name: 'Charizard', language: { name: 'en' } },
+            { name: 'リザードン', language: { name: 'ja' } },
+            { name: 'Dracaufeu', language: { name: 'fr' } }
+        ] });
+        if (String(url).startsWith('https://api.tcgdex.net/v2/ja/cards?name=')) return app.jsonResponse([
+            { id: 'sv2a-6', name: 'リザードン', localId: '6', image: '' }
+        ]);
+        if (String(url).startsWith('https://api.tcgdex.net/v2/fr/cards?name=')) return app.jsonResponse([
+            { id: 'xy1-12', name: 'Dracaufeu', localId: '12', image: '' }
+        ]);
+        if (String(url).endsWith('/ja/sets') || String(url).endsWith('/fr/sets')) return app.jsonResponse([]);
+        return fallback(url, options);
+    });
+    app.api.setPokemon({ name: 'charizard', id: 6 });
+    app.document.getElementById('add-search-input').value = 'Charizard';
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+    await app.api.searchCatalogCards('Charizard', 'add-set-options', app.api.revisions().add);
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url).includes('cards?name=リザードン')));
+    assert.deepEqual(app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId), ['sv2a-6']);
+    const japaneseSpeciesRequests = app.requests.filter(request => request.url === 'https://pokeapi.co/api/v2/pokemon-species/6/').length;
+    await app.api.searchCatalogCards('Charizard', 'add-set-options', app.api.revisions().add);
+    assert.equal(app.requests.filter(request => request.url === 'https://pokeapi.co/api/v2/pokemon-species/6/').length, japaneseSpeciesRequests);
+
+    app.document.getElementById('add-catalog-locale').value = 'fr';
+    app.api.changeCatalogLocale('add');
+    await new Promise(resolve => setTimeout(resolve, 275));
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url).includes('cards?name=Dracaufeu')));
+    assert.deepEqual(app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId), ['xy1-12']);
+    assert.equal(app.requests.filter(request => request.url === 'https://pokeapi.co/api/v2/pokemon-species/6/').length, japaneseSpeciesRequests + 1);
+});
+
+test('Hisuian form resolves its localized form name without accepting the base form', async () => {
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === 'https://pokeapi.co/api/v2/pokemon-species/570/') return app.jsonResponse({
+            names: [{ name: 'Zorua', language: { name: 'en' } }],
+            varieties: [
+                { is_default: true, pokemon: { name: 'zorua', url: 'https://pokeapi.co/api/v2/pokemon/570/' } },
+                { is_default: false, pokemon: { name: 'zorua-hisui', url: 'https://pokeapi.co/api/v2/pokemon/10263/' } }
+            ]
+        });
+        if (url === 'https://pokeapi.co/api/v2/pokemon/10263/') return app.jsonResponse({ forms: [
+            { url: 'https://pokeapi.co/api/v2/pokemon-form/10263/' }
+        ] });
+        if (url === 'https://pokeapi.co/api/v2/pokemon-form/10263/') return app.jsonResponse({ names: [
+            { name: 'ヒスイゾロア', language: { name: 'ja' } }
+        ] });
+        if (String(url).startsWith('https://api.tcgdex.net/v2/ja/cards?name=')) return app.jsonResponse([
+            { id: 'sv2a-570', name: 'ゾロア', localId: '570', image: '' },
+            { id: 'swsh11-147', name: 'ヒスイゾロア', localId: '147', image: '' }
+        ]);
+        if (String(url).endsWith('/ja/sets')) return app.jsonResponse([]);
+        return fallback(url, options);
+    });
+    app.api.setPokemon({ name: 'zorua', id: 570 });
+    app.document.getElementById('add-search-input').value = 'Zorua';
+    app.document.getElementById('add-form').value = 'Hisuian';
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+
+    await app.api.searchCatalogCards('Hisuian Zorua', 'add-set-options', app.api.revisions().add);
+
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url).includes('cards?name=ヒスイゾロア')));
+    assert.deepEqual(app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId), ['swsh11-147']);
+});
+
+test('typing a regional name stores its base species and national dex identity', () => {
+    const app = loadInteractiveApp();
+    app.api.setPokemonList([{ name: 'zorua', id: 570 }]);
+
+    app.api.selectPokemonCustom('Hisuian Zorua');
+
+    assert.equal(app.api.state().selectedPokemon.name, 'zorua');
+    assert.equal(app.api.state().selectedPokemon.id, 570);
+    assert.equal(app.document.getElementById('add-search-input').value, 'Zorua');
+    assert.equal(app.document.getElementById('add-form').value, 'Hisuian');
+    assert.equal(app.api.addCatalogQuery(), 'Hisuian Zorua');
+    assert.ok(app.requests.some(request => request.url.startsWith('/api/suggest-position?id=570&')));
+});
+
+test('add payload keeps localized printing, physical language, form and base species separate', async () => {
+    const app = loadInteractiveApp();
+    app.api.setPokemon({ name: 'zorua', id: 570 });
+    app.api.setCatalogCardForTest({
+        id: 'swsh11-147', name: 'ヒスイゾロア', provider: 'TCGdex', locale: 'ja',
+        setId: 'swsh11', setName: 'Lost Origin', number: '147', rarity: 'Common', variant: 'normal',
+        imageUrl: 'https://assets.tcgdex.net/ja/swsh/swsh11/147', imageSource: 'TCGdex', imageMatchId: ''
+    });
+    app.document.getElementById('add-search-input').value = 'Zorua';
+    app.document.getElementById('add-form').value = 'Hisuian';
+    app.document.getElementById('add-card-language').value = 'English';
+    app.document.getElementById('add-page').value = '3';
+    app.document.getElementById('add-slot').value = '4';
+
+    await app.api.submitAddCard();
+
+    const saved = JSON.parse(app.requests.find(request => request.url === '/api/add').options.body);
+    assert.deepEqual([
+        saved.name, saved.species_name, saved.dex_id, saved.form, saved.card_language,
+        saved.catalog_provider, saved.catalog_locale, saved.catalog_card_id, saved.set_id, saved.card_number, saved.catalog_variant
+    ], ['ヒスイゾロア', 'Zorua', 570, 'Hisuian', 'English', 'TCGdex', 'ja', 'swsh11-147', 'swsh11', '147', 'normal']);
+});
+
+test('late English catalog results cannot replace Japanese results after a locale switch', async () => {
+    let releaseEnglish;
+    const waitingForEnglish = new Promise(resolve => { releaseEnglish = resolve; });
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === 'https://pokeapi.co/api/v2/pokemon-species/25/') return app.jsonResponse({ names: [
+            { name: 'Pikachu', language: { name: 'en' } }, { name: 'ピカチュウ', language: { name: 'ja' } }
+        ] });
+        if (String(url).startsWith('https://api.tcgdex.net/v2/en/cards?name=')) return waitingForEnglish;
+        if (String(url).startsWith('https://api.tcgdex.net/v2/ja/cards?name=')) return app.jsonResponse([
+            { id: 'sv2a-025', name: 'ピカチュウ', localId: '025', image: '' }
+        ]);
+        if (String(url).endsWith('/ja/sets')) return app.jsonResponse([]);
+        return fallback(url, options);
+    });
+    app.api.setPokemon({ name: 'pikachu', id: 25 });
+    app.document.getElementById('add-search-input').value = 'Pikachu';
+    app.document.getElementById('add-card-language').value = 'English';
+    app.document.getElementById('add-catalog-locale').value = 'en';
+    const englishSearch = app.api.searchCatalogCards('Pikachu', 'add-set-options', app.api.revisions().add);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+    app.api.changeCatalogLocale('add');
+    await new Promise(resolve => setTimeout(resolve, 275));
+    releaseEnglish(app.jsonResponse([{ id: 'base1-25', name: 'Pikachu', localId: '25', image: '' }]));
+    await englishSearch;
+
+    assert.deepEqual(app.elements.get('add-set-options').children.map(option => option.dataset.catalogCardId), ['sv2a-025']);
+    assert.equal(app.document.getElementById('add-card-language').value, 'English');
+    assert.ok(app.requests.some(request => decodeURIComponent(request.url).includes('cards?name=ピカチュウ')));
+});
+
+test('Unicode name matching accepts card suffixes without losing the Pokémon name', () => {
+    const match = loadApp().isPokemonCardNameMatch;
+    assert.equal(match('ピカチュウex', 'ピカチュウ'), true);
+    assert.equal(match('Charizard VMAX', 'Charizard'), true);
+    assert.equal(match('M Charizard X-EX', 'Charizard'), true);
+});
+
+test('unavailable localized name does not fall back to English catalog results', async () => {
+    const app = loadInteractiveApp((url, options, fallback) => {
+        if (url === 'https://pokeapi.co/api/v2/pokemon-species/25/') return app.jsonResponse({
+            names: [{ name: 'Pikachu', language: { name: 'en' } }]
+        });
+        return fallback(url, options);
+    });
+    app.api.setPokemon({ name: 'pikachu', id: 25 });
+    app.document.getElementById('add-catalog-locale').value = 'ja';
+
+    await app.api.searchCatalogCards('Pikachu', 'add-set-options', app.api.revisions().add);
+
+    assert.equal(app.requests.some(request => String(request.url).includes('tcgdex.net/v2/')), false);
+    assert.match(app.elements.get('add-set-status').textContent, /Japanese|localized|name/i);
+});
+
+test('Ver preços still opens a search when no saved printing exists', async () => {
+    const app = loadInteractiveApp();
+    app.api.setModalCardForTest({ Name: 'Hisuian Zorua', 'Species Name': 'Zorua', 'Card Language': 'Japanese' });
+
+    await app.api.openMarketForCard();
+
+    assert.equal(app.api.modalOpen(), false);
+    assert.equal(app.api.activeTab(), 'market');
+    assert.equal(app.document.getElementById('market-name').value, 'Hisuian Zorua');
+    assert.equal(app.document.getElementById('market-locale').value, 'en');
+    assert.equal(app.document.getElementById('market-status').textContent, 'Searching…');
+});
+
+test('modal edition and market filters use dark responsive catalog controls', () => {
+    assert.ok(/class="modal-catalog-fields"/.test(html), 'modal language and search fields should share a layout');
+    assert.ok(/\.modal-catalog-fields\s*\{[^}]*display:\s*grid/.test(styles), 'modal fields should align in a grid');
+    assert.ok(/#modal-set-picker select,[^{}]*\.modal-catalog-search-row input[^{}]*\{[^}]*background-color:\s*var\(--bg-input\)/.test(styles), 'modal controls should use the app input background');
+    assert.ok(/\.market-filters input,[^{}]*\.market-filters select\s*\{[^}]*background-color:\s*var\(--bg-input\)/.test(styles), 'market controls should use the app input background');
+    assert.ok(/@media\s*\(max-width:\s*600px\)[\s\S]*\.market-filters\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(styles), 'market filters should stack on narrow windows');
 });

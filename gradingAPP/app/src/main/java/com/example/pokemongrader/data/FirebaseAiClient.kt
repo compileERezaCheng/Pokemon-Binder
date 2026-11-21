@@ -11,7 +11,6 @@ import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import kotlinx.coroutines.delay
 
-private const val MODEL_NAME = "gemini-3.5-flash-lite"
 private const val APP_NAME = "pokebinder-ai"
 
 internal fun hasFirebaseAiConfig(apiKey: String, appId: String, projectId: String): Boolean =
@@ -41,7 +40,7 @@ object FirebaseAiClient {
             FirebaseAppCheck.getInstance(app).installAppCheckProviderFactory(
                 PlayIntegrityAppCheckProviderFactory.getInstance()
             )
-            configuredModel = FirebaseAI.getInstance(app, GenerativeBackend.googleAI()).generativeModel(MODEL_NAME)
+            configuredModel = FirebaseAI.getInstance(app, GenerativeBackend.googleAI()).generativeModel(CARD_SCANNER_MODEL)
         } catch (_: Exception) {
             configuredModel = null
         }

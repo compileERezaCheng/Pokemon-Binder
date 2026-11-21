@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.pokemongrader.data.*
+import com.example.pokemongrader.ui.components.TcgDexLanguagePicker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +24,8 @@ data class MarketState(
     val name: String = "", val set: String = "", val number: String = "",
     val cards: List<CatalogCard> = emptyList(), val selected: CatalogCard? = null,
     val prices: List<MarketPrice> = emptyList(), val loading: Boolean = false,
-    val status: String = "Search by name, then select an edition.", val error: Boolean = false
+    val status: String = "Search by name, then select an edition.", val error: Boolean = false,
+    val locale: String = "en"
 )
 
 class MarketViewModel(private val client: MarketClient = MarketPrices.client) : ViewModel() {
@@ -32,19 +34,19 @@ class MarketViewModel(private val client: MarketClient = MarketPrices.client) : 
     private var request: Job? = null
     private var revision = 0
 
-    fun search(name: String, set: String, number: String) {
+    fun search(name: String, set: String, number: String, locale: String = state.value.locale) {
         request?.cancel()
         val token = ++revision
-        mutable.value = MarketState(name, set, number, loading = name.isNotBlank(), status = if (name.isBlank()) "Search by name, then select an edition." else "Searching…")
-        if (name.isBlank()) return
+        mutable.value = MarketState(name, set, number, loading = name.isNotBlank() && TcgDexLocale.isSupported(locale), status = when { name.isBlank() -> "Search by name, then select an edition."; !TcgDexLocale.isSupported(locale) -> "Choose a catalog language before searching."; else -> "Searching…" }, locale = locale)
+        if (name.isBlank() || !TcgDexLocale.isSupported(locale)) return
         request = viewModelScope.launch {
             delay(350)
             try {
-                val result = client.get("cards?name=" + URLEncoder.encode(name.trim(), "UTF-8"))
-                val sets = client.get("sets")
+                val result = client.get("cards?name=" + URLEncoder.encode(name.trim(), "UTF-8"), locale)
+                val sets = client.get("sets", locale)
                 val names = JSONArray(sets.json).let { array -> (0 until array.length()).mapNotNull { array.optJSONObject(it) }
                     .associate { it.optString("id") to it.optString("name") } }
-                val cards = TcgDexClient.sortBySetName(TcgDexClient.parseBriefCards(result.json, names)).filter {
+                val cards = TcgDexClient.sortBySetName(TcgDexClient.parseBriefCards(result.json, names, locale)).filter {
                     it.setName.contains(set.trim(), true) && (number.isBlank() || it.number.equals(number.substringBefore('/').trim(), true))
                 }
                 if (token == revision) mutable.value = mutable.value.copy(cards = cards, loading = false,
@@ -55,23 +57,48 @@ class MarketViewModel(private val client: MarketClient = MarketPrices.client) : 
         }
     }
 
+    fun openCard(card: Card) {
+        val locale = card.catalogLocale.takeIf(TcgDexLocale::isSupported).orEmpty()
+        if (card.catalogProvider != "TCGdex" || card.catalogCardId.isBlank() || !TcgDexLocale.isSupported(card.catalogLocale)) {
+            search(card.name, card.setName, card.cardNumber, locale)
+            return
+        }
+        val printing = CatalogCard(
+            id = card.catalogCardId,
+            name = card.name,
+            setId = card.setId,
+            setName = card.setName,
+            number = card.cardNumber,
+            rarity = card.catalogRarity,
+            imageUrl = card.imageUrl,
+            imageSource = card.imageSource,
+            imageMatchId = card.imageMatchId,
+            locale = card.catalogLocale,
+            provider = card.catalogProvider,
+            speciesDex = card.dexNumber
+        )
+        mutable.value = MarketState(card.name, card.setName, card.cardNumber, selected = printing, loading = true,
+            status = "Loading prices for this saved printing...", locale = card.catalogLocale)
+        select(printing)
+    }
+
     fun select(card: CatalogCard) {
         request?.cancel()
         val token = ++revision
         mutable.value = mutable.value.copy(selected = card, prices = emptyList(), loading = true, error = false, status = "Loading prices…")
         request = viewModelScope.launch {
             try {
-                val result = client.get("cards/" + URLEncoder.encode(card.id, "UTF-8"))
+                val result = client.get("cards/" + URLEncoder.encode(card.id, "UTF-8"), card.locale)
                 val prices = withContext(Dispatchers.Default) { MarketPrices.parse(result.json, card, result.consulted) }
                 if (token == revision) mutable.value = mutable.value.copy(prices = prices, loading = false,
-                    status = (if (result.stale) "Outdated cached prices · ${result.error} · " else "") +
-                        if (prices.isEmpty()) "Price unavailable for this printing." else "References per finish · English catalog")
+                        status = (if (result.stale) "Outdated cached prices · ${result.error} · " else "") +
+                        if (prices.isEmpty()) "Price unavailable for this printing." else "References per finish · ${TcgDexLocale.label(card.locale)} catalog; marketplace language unspecified")
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (token == revision) mutable.value = mutable.value.copy(loading = false, error = true, status = "Network error: ${e.message}") }
         }
     }
 
-    fun retry() { state.value.let { if (it.selected != null) select(it.selected) else search(it.name, it.set, it.number) } }
+    fun retry() { state.value.let { if (it.selected != null) select(it.selected) else search(it.name, it.set, it.number, it.locale) } }
 }
 
 @Composable
@@ -85,6 +112,7 @@ fun MarketScreen(state: MarketState, model: MarketViewModel) {
             Text("Uncertified cards · Marketplace language and condition unspecified. AI grades are not certification.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
         }
         item {
+            TcgDexLanguagePicker("Catalog language", state.locale, { model.search(state.name, state.set, state.number, it) })
             OutlinedTextField(state.name, { model.search(it, state.set, state.number) }, colors = inputColors, label = { Text("Card name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(state.set, { model.search(state.name, it, state.number) }, colors = inputColors, label = { Text("Set / expansion") }, singleLine = true, modifier = Modifier.weight(2f))
@@ -100,7 +128,7 @@ fun MarketScreen(state: MarketState, model: MarketViewModel) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     AsyncImage(selected.imageUrl, selected.name, Modifier.size(72.dp, 100.dp), placeholder = "Imagem indisponível")
-                    Text("${selected.name}\n${selected.setName} #${selected.number}\nEN", color = Color.White)
+                    Text("${selected.name}\n${TcgDexLocale.label(selected.locale)} catalog · ${selected.setName} #${selected.number}", color = Color.White)
                 }
             }
             items(state.prices) { price ->
@@ -115,7 +143,7 @@ fun MarketScreen(state: MarketState, model: MarketViewModel) {
         items(state.cards, key = { it.id }) { card ->
             Row(modifier = Modifier.fillMaxWidth().clickable { model.select(card) }.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AsyncImage(card.imageUrl, card.name, Modifier.size(48.dp, 68.dp), placeholder = "Imagem indisponível")
-                Text("${card.name}\n${card.setName} #${card.number} · EN", color = Color.White)
+                Text("${card.name}\n${TcgDexLocale.label(card.locale)} · ${card.setName} #${card.number}", color = Color.White)
             }
         }
     }

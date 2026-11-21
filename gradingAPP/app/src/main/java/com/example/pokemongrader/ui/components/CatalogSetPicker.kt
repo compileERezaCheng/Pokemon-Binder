@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.pokemongrader.data.CatalogCard
+import com.example.pokemongrader.data.TcgDexLocale
 import com.example.pokemongrader.data.TcgDexClient
 import com.example.pokemongrader.ui.main.AsyncImage
 import kotlinx.coroutines.CancellationException
@@ -42,9 +43,11 @@ fun CatalogSetPicker(
     selected: CatalogCard?,
     setHint: String = "",
     numberHint: String = "",
+    locale: String = "en",
+    identityKey: String = "",
     onSelected: (CatalogCard?) -> Unit
 ) {
-    val queryKey = listOf(name.trim(), setHint.trim(), numberHint.trim()).joinToString("|")
+    val queryKey = listOf(name.trim(), setHint.trim(), numberHint.trim(), locale, identityKey).joinToString("|")
     var candidates by remember { mutableStateOf<List<CatalogCard>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -59,18 +62,22 @@ fun CatalogSetPicker(
     LaunchedEffect(queryKey, retry) {
         val request = ++requestId
         userSelected = false
+        if (selected != null && (selected.locale != locale || !TcgDexClient.isPokemonCardNameMatch(selected.name, name))) onSelected(null)
         candidates = emptyList()
         error = ""
-        if (name.isBlank()) return@LaunchedEffect
+        if (name.isBlank() || !TcgDexLocale.isSupported(locale)) {
+            if (name.isNotBlank()) error = "Choose a supported catalog language or save manually."
+            return@LaunchedEffect
+        }
         loading = true
         try {
-            val found = TcgDexClient.searchCards(name, setHint, numberHint)
+            val found = TcgDexClient.searchCards(name, setHint, numberHint, locale)
             if (request != requestId) return@LaunchedEffect
             candidates = found
             val unique = TcgDexClient.uniqueCard(found, name, setHint, numberHint)
             if (unique != null && selected?.id != unique.id && !userSelected) {
                 onSelected(unique)
-                val details = runCatching { TcgDexClient.fetchCard(unique.id) }.getOrNull()
+                val details = runCatching { TcgDexClient.fetchCard(unique.id, locale) }.getOrNull()
                 if (request == requestId && !userSelected && details != null) onSelected(details.withCandidateImage(unique))
             }
         } catch (e: CancellationException) {
@@ -88,7 +95,7 @@ fun CatalogSetPicker(
         onSelected(card)
         expanded = false
         if (card != null) scope.launch {
-            val details = runCatching { TcgDexClient.fetchCard(card.id) }.getOrNull()
+            val details = runCatching { TcgDexClient.fetchCard(card.id, locale) }.getOrNull()
             if (request == requestId && details != null) onSelected(details.withCandidateImage(card))
         }
     }
@@ -165,7 +172,7 @@ fun CatalogSetPicker(
 
 @Composable
 internal fun CatalogSetOption(candidate: CatalogCard, onImageResolved: (CatalogCard) -> Unit = {}) {
-    var imageCard by remember(candidate.id, candidate.imageUrl) { mutableStateOf(candidate) }
+    var imageCard by remember(candidate.provider, candidate.locale, candidate.id, candidate.imageUrl) { mutableStateOf(candidate) }
     val scope = rememberCoroutineScope()
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -187,8 +194,8 @@ internal fun CatalogSetOption(candidate: CatalogCard, onImageResolved: (CatalogC
             }
         )
         Column(modifier = Modifier.weight(1f)) {
-            Text(imageCard.setName, style = MaterialTheme.typography.bodyMedium)
-            Text("#" + imageCard.number, style = MaterialTheme.typography.bodySmall)
+            Text(imageCard.name, style = MaterialTheme.typography.bodyMedium)
+            Text("${TcgDexLocale.label(imageCard.locale)} · ${imageCard.setName} · #${imageCard.number}", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -197,3 +204,32 @@ private fun CatalogCard.withCandidateImage(candidate: CatalogCard): CatalogCard 
     if (candidate.imageSource == "Scrydex") copy(
         imageUrl = candidate.imageUrl, imageSource = candidate.imageSource, imageMatchId = candidate.imageMatchId
     ) else this
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TcgDexLanguagePicker(label: String, value: String, onChanged: (String) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember(label) { mutableStateOf(false) }
+    val languageName = if (value.isBlank()) "Unknown / manual" else TcgDexLocale.label(value)
+    Column(modifier) {
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = languageName,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(label) },
+                trailingIcon = { androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                    focusedBorderColor = Color(0xFFEF4444), unfocusedBorderColor = Color(0xFF334155)
+                ),
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.exposedDropdownSize()) {
+                DropdownMenuItem(text = { Text("Unknown / manual") }, onClick = { onChanged(""); expanded = false })
+                TcgDexLocale.languages.forEach { language ->
+                    DropdownMenuItem(text = { Text("${language.label} (${language.code})") }, onClick = { onChanged(language.code); expanded = false })
+                }
+            }
+        }
+    }
+}

@@ -541,7 +541,8 @@ def save_config(config):
     except Exception as e:
         print(f"{CLR_FAIL}[!] Error saving configuration: {e}{CLR_RESET}")
 
-COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID"]
+COLLECTION_FIELDS = ["Page", "Slot", "Dex Number", "Name", "Species Name", "Form", "Card Language", "Type", "Condition", "Notes", "Date Added", "Image URL", "Copy ID", "Catalog Provider", "Catalog Locale", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID"]
+OPTIONAL_COLLECTION_FIELDS = set(COLLECTION_FIELDS) - {"Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Copy ID"}
 
 def legacy_copy_id(card, index):
     identity = "|".join(str(card.get(field, "") or "") for field in (
@@ -580,9 +581,20 @@ def _load_collection_file(path, user_id=None):
                     if not row.get("Copy ID"):
                         row["Copy ID"] = legacy_copy_id(row, index)
                         migration_needed = True
+                    catalog_card_id = str(row.get("Catalog Card ID") or "").strip()
+                    catalog_provider = str(row.get("Catalog Provider") or "").strip()
+                    catalog_locale = str(row.get("Catalog Locale") or "").strip()
+                    # Old IDs came from the English-only TCGdex path; physical language remains unknown.
+                    if catalog_card_id and not catalog_provider:
+                        row["Catalog Provider"] = "TCGdex"
+                        catalog_provider = "TCGdex"
+                        migration_needed = True
+                    if catalog_card_id and catalog_provider == "TCGdex" and not catalog_locale:
+                        row["Catalog Locale"] = "en"
+                        migration_needed = True
                     if not row.get("Image URL"):
                         row.pop("Image URL", None)
-                    for field in COLLECTION_FIELDS[9:]:
+                    for field in OPTIONAL_COLLECTION_FIELDS:
                         if not row.get(field):
                             row.pop(field, None)
                     
@@ -641,10 +653,9 @@ def _load_collection_file(path, user_id=None):
             
             if migration_needed:
                 print(f"{CLR_INFO}[i] Database migration triggered: upgrading old rarity fields...{CLR_RESET}")
-                if path == DATA_FILE:
-                    backup = path + ".pre-migration.bak"
-                    if not os.path.exists(backup):
-                        shutil.copy2(path, backup)
+                backup = path + ".pre-migration.bak"
+                if not os.path.exists(backup):
+                    shutil.copy2(path, backup)
                 save_collection(collection, user_id=user_id)
         except Exception as e:
             print(f"{CLR_FAIL}[!] Error reading collection CSV: {e}{CLR_RESET}")
@@ -747,27 +758,7 @@ def sync_with_google_sheets(config, collection):
         # Assemble rows
         rows_to_write = []
         for card in collection:
-            rows_to_write.append([
-                card["Page"],
-                card["Slot"],
-                card["Dex Number"] if card["Dex Number"] else "",
-                card["Name"],
-                card.get("Type", "Normal"),
-                card["Condition"],
-                card["Notes"] or "",
-                card["Date Added"],
-                card.get("Image URL", ""),
-                card.get("Copy ID", ""),
-                card.get("Catalog Card ID", ""),
-                card.get("Set ID", ""),
-                card.get("Set Name", ""),
-                card.get("Card Number", ""),
-                card.get("Catalog Rarity", ""),
-                card.get("Grade", ""),
-                card.get("Grade Details", ""),
-                card.get("Image Source", ""),
-                card.get("Image Match ID", "")
-            ])
+            rows_to_write.append([card.get(field, "") or "" for field in headers])
             
         worksheet.clear()
         worksheet.append_row(headers)
@@ -990,7 +981,7 @@ def firebase_logout(config):
     save_config(config)
     return True, "Disconnected from Firebase. This Windows profile's collection is local again."
 
-SYNC_PRINTING_FIELDS = ("Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID")
+SYNC_PRINTING_FIELDS = ("Name", "Species Name", "Dex Number", "Form", "Card Language", "Catalog Provider", "Catalog Locale", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID")
 
 def _remote_cards(data):
     values = data if isinstance(data, list) else list(data.values()) if isinstance(data, dict) else []

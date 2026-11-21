@@ -4,11 +4,13 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
 import com.example.pokemongrader.ui.login.LoginScreen
 import com.example.pokemongrader.ui.main.MainScreen
@@ -26,6 +28,7 @@ fun MainNavigation(repository: DataRepository) {
   val backStack = rememberNavBackStack(initialKey)
   val activeTab = rememberSaveable { mutableStateOf("binder") }
   val currentPage = rememberSaveable { mutableIntStateOf(1) }
+  val marketCardToOpen = remember { mutableStateOf<Card?>(null) }
 
   NavDisplay(
       backStack = backStack,
@@ -48,6 +51,8 @@ fun MainNavigation(repository: DataRepository) {
             onActiveTabChange = { activeTab.value = it },
             currentPage = currentPage.intValue,
             onCurrentPageChange = { currentPage.intValue = it.coerceAtLeast(1) },
+            marketCardToOpen = marketCardToOpen.value,
+            onMarketCardConsumed = { marketCardToOpen.value = null },
             modifier = Modifier.safeDrawingPadding()
           )
         }
@@ -59,6 +64,7 @@ fun MainNavigation(repository: DataRepository) {
               currentPage.intValue = page
             },
             onNavigateBack = { backStack.removeLastOrNull() },
+            onConfigureAi = { if (backStack.lastOrNull() == Scan) backStack.add(AccountSettings) },
             modifier = Modifier.safeDrawingPadding()
           )
         }
@@ -70,6 +76,11 @@ fun MainNavigation(repository: DataRepository) {
             copyId = key.copyId,
             repository = repository,
             onNavigateBack = { backStack.removeLastOrNull() },
+            onNavigateToMarket = { card ->
+              marketCardToOpen.value = card
+              activeTab.value = "market"
+              backStack.removeLastOrNull()
+            },
             modifier = Modifier.safeDrawingPadding()
           )
         }

@@ -5,6 +5,15 @@
 *.jks
 *.keystore
 *.p12
+*.pfx
+*.pem
+*.key
+**/.env
+**/.env.*
+**/credentials.json
+**/*service-account*.json
+**/*service_account*.json
+**/firebase_client_config.json
 URGENT_UPDATES.md
 temp.md
 app_logo.png
@@ -13,6 +22,12 @@ app_logo.png
 
 # --- PROJECT CONTEXT ---
 **/PROJECT_CONTEXT.md
+
+# Local prompts, working notes and private beta packaging checks
+prompt*.md
+codex-*.md
+BETA_READINESS.md
+binder/tests/test_beta_staging.py
 
 # --- ANDROID APP (gradingAPP) ---
 gradingAPP/.gradle/

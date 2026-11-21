@@ -205,6 +205,7 @@
                 </div>
                 <div class="market-filters">
                     <label>Card name<input id="market-name" class="catalog-set-search" placeholder="Search Pikachu, Charizard, Mew…" oninput="scheduleMarketSearch()" autocomplete="off"></label>
+                    <label>Catalog language<select id="market-locale" data-tcgdex-locale onchange="scheduleMarketSearch()"></select></label>
                     <label>Set / expansion<select id="market-set" class="catalog-set-search" onchange="scheduleMarketSearch()"><option value="">All sets</option></select></label>
                     <label>Card number<input id="market-number" class="catalog-set-search" placeholder="# e.g. 25" oninput="scheduleMarketSearch()"></label>
                 </div>
@@ -223,7 +224,7 @@
                         </div>
                         <div id="market-details" hidden>
                             <div class="market-detail-heading">
-                                <span class="badge">ENGLISH CATALOG · UNCERTIFIED</span>
+                                <span id="market-catalog-label" class="badge">TCGdex catalog · sale language unspecified</span>
                                 <h3 id="market-card-name"></h3>
                                 <p id="market-card-set"></p>
                             </div>
@@ -327,14 +328,31 @@
                     <div class="form-main">
                         <h2 class="form-section-title">Card Identification</h2>
                         <div class="form-group">
-                            <label for="add-search-input">Search Pokémon (Name or Dex ID)</label>
+                            <label for="add-search-input">Pokémon</label>
                             <div class="autocomplete-wrapper">
-                                <input type="text" id="add-search-input" placeholder="e.g. Charizard or 6" autocomplete="off" oninput="handleAutocomplete(this.value)">
+                                <input type="text" id="add-search-input" placeholder="e.g. Charizard, リザードン or Hisuian Zorua" autocomplete="off" oninput="handleAutocomplete(this.value)">
                                 <div id="autocomplete-suggestions" class="autocomplete-suggestions-box hidden"></div>
                             </div>
                         </div>
+                        <div class="form-row-2">
+                            <div class="form-group"><label for="add-form">Form</label><select id="add-form" onchange="invalidateAddIdentity()">
+                                <option value="Normal" selected>Normal</option><option value="Alolan">Alolan</option>
+                                <option value="Galarian">Galarian</option><option value="Hisuian">Hisuian</option>
+                                <option value="Paldean">Paldean</option>
+                            </select></div>
+                            <div class="form-group"><label for="add-card-language">Physical card language</label><select id="add-card-language">
+                                <option value="">Unknown</option><option value="English">English</option><option value="Japanese">Japanese</option>
+                                <option value="Portuguese (Brazil)">Portuguese (Brazil)</option><option value="Portuguese (Portugal)">Portuguese (Portugal)</option>
+                                <option value="French">French</option><option value="German">German</option><option value="Spanish">Spanish</option>
+                                <option value="Italian">Italian</option><option value="Korean">Korean</option><option value="Chinese (Traditional)">Chinese (Traditional)</option>
+                                <option value="Chinese (Simplified)">Chinese (Simplified)</option><option value="Indonesian">Indonesian</option>
+                                <option value="Thai">Thai</option><option value="Dutch">Dutch</option><option value="Polish">Polish</option><option value="Russian">Russian</option>
+                            </select></div>
+                        </div>
                         <div class="form-group">
                             <label>TCGdex printing (optional)</label>
+                            <label for="add-catalog-locale">Catalog search language</label>
+                            <select id="add-catalog-locale" data-tcgdex-locale onchange="changeCatalogLocale('add')"></select>
                             <div id="add-set-status" class="muted-text" aria-live="polite">Select a Pokémon to search its printings.</div>
                             <input id="add-set-search" class="catalog-search" type="search" placeholder="Pesquisar edições…" aria-label="Pesquisar edições" oninput="filterCatalogOptions('add-set-options', this.value)" autocomplete="off" hidden>
                             <div id="add-set-options" class="catalog-options" role="listbox" aria-label="TCGdex printings"></div>
@@ -644,6 +662,11 @@
                             <div id="modal-grade-summary" class="grade-summary"></div>
                         </div>
                     </div>
+                    <div class="modal-copy-facts" aria-label="Identidade da carta">
+                        <div class="modal-copy-fact"><span>Espécie base</span><strong id="modal-pokemon-species">—</strong></div>
+                        <div class="modal-copy-fact"><span>Forma</span><strong id="modal-pokemon-form">—</strong></div>
+                        <div class="modal-copy-fact"><span>Idioma físico</span><strong id="modal-pokemon-language">Desconhecido</strong></div>
+                    </div>
                     <div id="modal-grade-criteria" class="grade-criteria"></div>
                     <details id="modal-grade-details" class="grade-details">
                         <summary>Detalhes da avaliação</summary>
@@ -655,6 +678,12 @@
                     <form id="modal-edit-form" class="modal-edit-form hidden" onsubmit="event.preventDefault(); saveModalCopyDetails()">
                         <label for="modal-edit-name">Pokémon</label>
                         <input id="modal-edit-name" type="text" maxlength="80" required>
+                        <div class="modal-edit-grid">
+                            <label for="modal-edit-species">Espécie base<input id="modal-edit-species" maxlength="80"></label>
+                            <label for="modal-edit-pokemon-form">Forma<input id="modal-edit-pokemon-form" maxlength="80"></label>
+                            <label for="modal-edit-language">Idioma físico<input id="modal-edit-language" list="card-language-options" maxlength="40" placeholder="Desconhecido"></label>
+                            <label for="modal-edit-variant">Variante/acabamento<input id="modal-edit-variant" maxlength="80"></label>
+                        </div>
                         <div class="modal-edit-grid">
                             <label for="modal-edit-dex">N.º Pokédex<input id="modal-edit-dex" type="number" min="0" step="1"></label>
                             <label for="modal-edit-condition">Condição<select id="modal-edit-condition"><option value="NM">NM</option><option value="LP">LP</option><option value="MP">MP</option><option value="HP">HP</option></select></label>
@@ -681,9 +710,20 @@
                     <div class="detail-group modal-edition-group">
                         <div id="modal-set-status" class="modal-set-status" aria-live="polite"></div>
                         <div id="modal-set-picker" class="modal-set-picker hidden">
+                            <div class="modal-catalog-fields">
+                                <div class="modal-catalog-field">
+                                    <label for="modal-catalog-locale">Catalog search language</label>
+                                    <select id="modal-catalog-locale" data-tcgdex-locale onchange="changeCatalogLocale('modal')"></select>
+                                </div>
+                                <div class="modal-catalog-field">
+                                    <label for="modal-catalog-name-search">Search name in this catalog</label>
+                                    <div class="modal-catalog-search-row"><input id="modal-catalog-name-search" type="search" maxlength="80" oninput="invalidateModalCatalogSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();searchModalCatalogCards()}"><button class="btn-secondary" type="button" onclick="searchModalCatalogCards()">Search</button></div>
+                                </div>
+                            </div>
                             <div class="modal-picker-toolbar">
                                 <span id="modal-pending-set" class="modal-pending-set hidden" aria-live="polite"></span>
                                 <div class="modal-picker-actions">
+                                    <button id="modal-clear-set" class="btn-secondary" type="button" onclick="clearModalCatalogCard()">Limpar edição</button>
                                     <button id="modal-cancel-set" class="btn-secondary" type="button" onclick="cancelModalCatalogSelection()">Cancelar</button>
                                     <button id="modal-save-set" class="btn-primary" type="button" onclick="saveModalCatalogCard()" disabled>Guardar edição</button>
                                 </div>
@@ -700,6 +740,7 @@
                     </div>
 
                     <div class="modal-actions">
+                        <button class="btn-secondary" type="button" onclick="openMarketForCard()">Ver preços</button>
                         <button class="btn-remove-quiet" type="button" id="modal-delete-btn" onclick="deleteCardFromModal()">
                             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19h12v2H6zm1-15h10l1 2H6zm1 4h8v9H8z"/></svg>
                             Remover da coleção
@@ -713,6 +754,22 @@
         <button class="modal-image-viewer-close" type="button" aria-label="Fechar imagem ampliada" onclick="closeModalImageViewer()">×</button>
         <img id="modal-image-viewer-image" src="" alt="">
     </div>
+    <datalist id="card-language-options">
+        <option value="English"></option><option value="Japanese"></option><option value="Portuguese (Brazil)"></option>
+        <option value="Portuguese (Portugal)"></option><option value="French"></option><option value="German"></option>
+        <option value="Spanish"></option><option value="Italian"></option><option value="Korean"></option>
+        <option value="Chinese (Traditional)"></option><option value="Chinese (Simplified)"></option><option value="Indonesian"></option>
+        <option value="Thai"></option><option value="Dutch"></option><option value="Polish"></option><option value="Russian"></option>
+    </datalist>
+    <template id="tcgdex-locale-options">
+        <option value="en">English (en)</option><option value="ja">Japanese (ja)</option>
+        <option value="pt-br">Portuguese, Brazil (pt-br)</option><option value="pt-pt">Portuguese, Portugal (pt-pt)</option>
+        <option value="pt">Portuguese (pt)</option><option value="fr">French (fr)</option><option value="de">German (de)</option>
+        <option value="es">Spanish (es)</option><option value="it">Italian (it)</option><option value="ko">Korean (ko)</option>
+        <option value="zh-tw">Chinese, Traditional (zh-tw)</option><option value="zh-cn">Chinese, Simplified (zh-cn)</option>
+        <option value="id">Indonesian (id)</option><option value="th">Thai (th)</option><option value="nl">Dutch (nl)</option>
+        <option value="pl">Polish (pl)</option><option value="ru">Russian (ru)</option>
+    </template>
     <script src="market.js"></script>
     <script src="index.js"></script>
 </body>

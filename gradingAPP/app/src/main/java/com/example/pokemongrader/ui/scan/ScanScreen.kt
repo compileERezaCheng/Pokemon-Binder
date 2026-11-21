@@ -2,6 +2,7 @@ package com.example.pokemongrader.ui.scan
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,17 +46,23 @@ import com.example.pokemongrader.ui.components.CatalogSetPicker
 import com.example.pokemongrader.ui.components.GradeSummary
 import com.example.pokemongrader.data.DataRepository
 import com.example.pokemongrader.data.FirebaseAiClient
+import com.example.pokemongrader.data.PersonalGeminiSession
 import com.example.pokemongrader.data.PokeApiClient
 import com.example.pokemongrader.data.TcgDexClient
+import com.example.pokemongrader.data.TcgDexLocale
 import com.example.pokemongrader.data.retryAiQuota
 import com.example.pokemongrader.ui.main.AsyncImage
 import com.example.pokemongrader.ui.main.capitalize
+import com.example.pokemongrader.ui.components.TcgDexLanguagePicker
 import com.google.firebase.ai.type.content
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import org.json.JSONException
 import org.json.JSONObject
 
 internal val CONDITION_ESTIMATE_PROMPT = """
@@ -120,10 +128,14 @@ fun ScanScreen(
     repository: DataRepository,
     onCardAdded: (Int) -> Unit,
     onNavigateBack: () -> Unit,
+    onConfigureAi: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val personalGemini = repository.personalGemini
+    val personalClient = personalGemini?.client?.collectAsStateWithLifecycle()?.value
+    val scannerReady = personalClient != null || FirebaseAiClient.isReady
 
     var scanState by remember { mutableStateOf(ScanState.CAMERA) }
     var scanSide by remember { mutableStateOf(ScanSide.FRONT) }
@@ -148,14 +160,20 @@ fun ScanScreen(
         onResult = { granted -> hasCameraPermission = granted }
     )
 
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
+    LaunchedEffect(scannerReady) {
+        if (scannerReady && !hasCameraPermission) {
             launcher.launch(android.Manifest.permission.CAMERA)
         }
     }
 
     // Result Data
     var resolvedName by remember { mutableStateOf("") }
+    var resolvedSpecies by remember { mutableStateOf("") }
+    var resolvedForm by remember { mutableStateOf("") }
+    var resolvedCardLanguage by remember { mutableStateOf("") }
+    var catalogLocale by remember { mutableStateOf("en") }
+    var resolvedVariant by remember { mutableStateOf("") }
+    var speciesLookupRevision by remember { mutableIntStateOf(0) }
     var resolvedDex by remember { mutableStateOf(0) }
     var resolvedRarity by remember { mutableStateOf("Normal") }
     var resolvedImageUrl by remember { mutableStateOf("") }
@@ -208,7 +226,18 @@ fun ScanScreen(
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color(0xFF020617))) {
-        if (!hasCameraPermission && scanState != ScanState.MANUAL) {
+        if (!scannerReady && scanState != ScanState.MANUAL) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)
+            ) {
+                Text("Add a card", style = MaterialTheme.typography.headlineSmall)
+                Button(onClick = { scanState = ScanState.MANUAL }) { Text("Enter Manually") }
+                OutlinedButton(onClick = onConfigureAi) { Text("Set up Gemini scanner") }
+                TextButton(onClick = onNavigateBack) { Text("Back") }
+            }
+        } else if (!hasCameraPermission && scanState != ScanState.MANUAL) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -233,6 +262,12 @@ fun ScanScreen(
                         onCapture = {
                             captureError = ""
                             resolvedName = ""
+                            resolvedSpecies = ""
+                            resolvedForm = ""
+                            resolvedCardLanguage = ""
+                            catalogLocale = "en"
+                            resolvedVariant = ""
+                            speciesLookupRevision++
                             resolvedRarity = "Normal"
                             resolvedImageUrl = ""
                             selectedCatalogCard = null
@@ -278,6 +313,7 @@ fun ScanScreen(
                                 scanState = ScanState.CAMERA
                             }) { Text("Retake photo") }
                             Button(onClick = {
+                                if (scanState != ScanState.REVIEW) return@Button
                                 if (scanSide == ScanSide.FRONT) {
                                     scanSide = ScanSide.BACK
                                     scanState = ScanState.CAMERA
@@ -286,20 +322,41 @@ fun ScanScreen(
                                     gradingStatus = "Identifying the card from its front..."
                                     coroutineScope.launch {
                                         try {
-                                            val result = identifyCardWithGemini(frontBitmap!!) { attempt, delayMs ->
+                                            val result = identifyCardWithGemini(frontBitmap!!, personalGemini) { attempt, delayMs ->
                                                 gradingStatus = "Quota limit. Retry $attempt in ${delayMs / 1000}s..."
                                             }
-                                            resolvedName = result.getString("name")
-                                            resolvedRarity = result.getString("rarity")
-                                            resolvedDex = result.getInt("dex_number")
+                                            resolvedName = result.optString("printed_name").ifBlank { result.optString("name") }.trim()
+                                            resolvedSpecies = result.optString("species_name").trim()
+                                            resolvedForm = result.optString("form").trim()
+                                            val detectedLanguage = result.optString("card_language").trim()
+                                                .takeUnless { it.equals("unknown", true) }.orEmpty()
+                                            val recognizedLocale = TcgDexLocale.languages.firstOrNull {
+                                                it.code.equals(detectedLanguage, true) || it.label.equals(detectedLanguage, true)
+                                            }?.code
+                                            resolvedCardLanguage = recognizedLocale ?: detectedLanguage
+                                            if (recognizedLocale != null) catalogLocale = recognizedLocale
+                                            resolvedVariant = result.optString("variant").trim()
+                                            resolvedRarity = result.optString("rarity").trim().ifBlank { "Unknown" }
+                                            resolvedDex = 0
                                             catalogSetHint = result.optString("set_name")
                                             catalogNumberHint = result.optString("card_number")
                                             selectedCatalogCard = null
                                             resolvedImageUrl = ""
-                                            if (resolvedDex > 0 && repository.prefilledPage == null) {
-                                                page = (((resolvedDex - 1) / 9) + 1).toString()
-                                                slot = (((resolvedDex - 1) % 9) + 1).toString()
+                                            val query = resolvedSpecies.ifBlank { resolvedName }
+                                            val request = ++speciesLookupRevision
+                                            if (query.isNotBlank()) coroutineScope.launch {
+                                                val dex = PokeApiClient.fetchDexNumber(query)
+                                                if (request == speciesLookupRevision && dex > 0) {
+                                                    resolvedDex = dex
+                                                    if (repository.prefilledPage == null) {
+                                                        val position = PokeApiClient.binderPosition(dex)
+                                                        page = position.first.toString()
+                                                        slot = position.second.toString()
+                                                    }
+                                                }
                                             }
+                                        } catch (e: CancellationException) {
+                                            throw e
                                         } catch (e: Exception) {
                                             resolvedCritique = "Identification unavailable: ${e.message}. Correct the fields before saving."
                                         }
@@ -316,6 +373,11 @@ fun ScanScreen(
                 ScanState.CONFIRM, ScanState.MANUAL -> {
                     ConfirmationScreen(
                         name = resolvedName,
+                        speciesName = resolvedSpecies,
+                        form = resolvedForm,
+                        cardLanguage = resolvedCardLanguage,
+                        catalogLocale = catalogLocale,
+                        catalogVariant = resolvedVariant,
                         dex = resolvedDex,
                         rarity = resolvedRarity,
                         grade = resolvedGrade,
@@ -331,17 +393,19 @@ fun ScanScreen(
                         allPokemonNames = allPokemonNames,
                         frontBitmap = frontBitmap,
                         backBitmap = backBitmap,
+                        personalGemini = personalGemini,
                         saveError = saveError,
                         onNameChange = {
                             resolvedName = it
                             selectedCatalogCard = null
-                            catalogSetHint = ""
-                            catalogNumberHint = ""
                             resolvedImageUrl = ""
-                            if (it.length > 2) {
+                            resolvedDex = 0
+                            val query = resolvedSpecies.ifBlank { it }
+                            val request = ++speciesLookupRevision
+                            if (query.length > 2) {
                                 coroutineScope.launch {
-                                    val dex = PokeApiClient.fetchDexNumber(it)
-                                    if (dex > 0) {
+                                    val dex = PokeApiClient.fetchDexNumber(query)
+                                    if (request == speciesLookupRevision && dex > 0) {
                                         resolvedDex = dex
                                         if (repository.prefilledPage == null) {
                                             val position = PokeApiClient.binderPosition(dex)
@@ -352,12 +416,48 @@ fun ScanScreen(
                                 }
                             }
                         },
+                        onSpeciesNameChange = {
+                            resolvedSpecies = it
+                            selectedCatalogCard = null
+                            resolvedImageUrl = ""
+                            resolvedDex = 0
+                            val request = ++speciesLookupRevision
+                            if (it.length > 2) coroutineScope.launch {
+                                val dex = PokeApiClient.fetchDexNumber(it)
+                                if (request == speciesLookupRevision && dex > 0) {
+                                    resolvedDex = dex
+                                    if (repository.prefilledPage == null) {
+                                        val position = PokeApiClient.binderPosition(dex)
+                                        page = position.first.toString()
+                                        slot = position.second.toString()
+                                    }
+                                }
+                            }
+                        },
+                        onFormChange = {
+                            resolvedForm = it
+                            selectedCatalogCard = null
+                            resolvedImageUrl = ""
+                            speciesLookupRevision++
+                        },
+                        onCardLanguageChange = {
+                            resolvedCardLanguage = it
+                            selectedCatalogCard = null
+                            resolvedImageUrl = ""
+                        },
+                        onCatalogLocaleChange = {
+                            catalogLocale = it
+                            selectedCatalogCard = null
+                            resolvedImageUrl = ""
+                        },
+                        onCatalogVariantChange = { resolvedVariant = it },
+                        onCatalogSetHintChange = { catalogSetHint = it; selectedCatalogCard = null; resolvedImageUrl = "" },
+                        onCatalogNumberHintChange = { catalogNumberHint = it; selectedCatalogCard = null; resolvedImageUrl = "" },
                         onDexChange = {
                             val dex = it.toIntOrNull() ?: 0
                             resolvedDex = dex
+                            speciesLookupRevision++
                             selectedCatalogCard = null
-                            catalogSetHint = ""
-                            catalogNumberHint = ""
                             resolvedImageUrl = ""
                             if (dex > 0 && repository.prefilledPage == null) {
                                 val position = PokeApiClient.binderPosition(dex)
@@ -373,6 +473,15 @@ fun ScanScreen(
                         onCatalogSelected = {
                             selectedCatalogCard = it
                             resolvedImageUrl = it?.imageUrl.orEmpty()
+                            it?.speciesDex?.takeIf { dex -> dex > 0 }?.let { dex ->
+                                resolvedDex = dex
+                                speciesLookupRevision++
+                                if (repository.prefilledPage == null) {
+                                    val position = PokeApiClient.binderPosition(dex)
+                                    page = position.first.toString()
+                                    slot = position.second.toString()
+                                }
+                            }
                             if (!it?.rarity.isNullOrBlank()) resolvedRarity = it!!.rarity
                         },
                         onPageChange = { page = it },
@@ -385,11 +494,15 @@ fun ScanScreen(
                                     saveError = "Enter a name, valid page and slot before saving."
                                     return@launch
                                 }
+                                if (cards.any { it.page == finalPage && it.slot == finalSlot }) {
+                                    saveError = "That binder slot is occupied. Choose another slot; the existing card was not changed."
+                                    return@launch
+                                }
                                 val card = Card(
                                     page = finalPage,
                                     slot = finalSlot,
                                     dexNumber = resolvedDex,
-                                    name = resolvedName.trim().lowercase(),
+                                    name = resolvedName.trim(),
                                     type = resolvedRarity,
                                     // ponytail: coarse mapping until reference cards can calibrate category thresholds.
                                     condition = when {
@@ -401,10 +514,16 @@ fun ScanScreen(
                                     },
                                     notes = personalNotes.trim(),
                                     gradeDetails = resolvedGradeDetails,
+                                    speciesName = resolvedSpecies.trim(),
+                                    form = resolvedForm.trim(),
+                                    cardLanguage = resolvedCardLanguage.trim(),
+                                    catalogProvider = selectedCatalogCard?.provider ?: if (catalogLocale.isNotBlank()) "TCGdex" else "",
+                                    catalogLocale = selectedCatalogCard?.locale ?: catalogLocale,
+                                    catalogVariant = resolvedVariant.trim(),
                                     catalogCardId = selectedCatalogCard?.id.orEmpty(),
                                     setId = selectedCatalogCard?.setId.orEmpty(),
-                                    setName = selectedCatalogCard?.setName.orEmpty(),
-                                    cardNumber = selectedCatalogCard?.number.orEmpty(),
+                                    setName = selectedCatalogCard?.setName ?: catalogSetHint.trim(),
+                                    cardNumber = selectedCatalogCard?.number ?: catalogNumberHint.trim(),
                                     catalogRarity = selectedCatalogCard?.rarity.orEmpty(),
                                     dateAdded = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                                     grade = resolvedGrade,
@@ -469,78 +588,87 @@ suspend fun takePhoto(context: android.content.Context, imageCapture: ImageCaptu
     bitmap
 }
 
-suspend fun identifyCardWithGemini(
+private suspend fun identifyCardWithGemini(
     front: Bitmap,
+    personalGemini: PersonalGeminiSession?,
     onRetry: (attempt: Int, delayMs: Long) -> Unit
-): JSONObject = withContext(Dispatchers.IO) {
-    val generativeModel = FirebaseAiClient.model()
-
+): JSONObject {
     val prompt = """
         Analyze the front image of this physical Pokémon card.
-        Identify the standard English card name, national Pokedex number, visible rarity,
-        expansion set name, and printed card number (including letters such as TG or SV).
-        If the set or card number is not readable, return an empty string for that field.
-        If identification is uncertain, return an empty name.
+        Transcribe the printed card name exactly as shown, preserving its language and writing system.
+        Separately identify the base Pokémon species and regional form only when confident.
+        Identify the physical card language, printed expansion set name, printed card number,
+        rarity and finish/variant only when visible. Do not translate the printed name.
+        For every uncertain or unreadable field, return an empty string. Never guess a Pokédex number.
 
         Return ONLY a JSON object:
         {
-          "name": "Pokémon Name",
-          "dex_number": 25,
-          "rarity": "Rarity Tier",
-          "set_name": "Expansion Name",
+          "printed_name": "Name exactly as printed",
+          "species_name": "Canonical species name or empty",
+          "form": "Regional form or empty",
+          "card_language": "Language name or code, or empty",
+          "rarity": "Visible rarity or empty",
+          "variant": "Finish or variant, or empty",
+          "set_name": "Printed expansion name or empty",
           "card_number": "123/198"
         }
     """.trimIndent()
 
-    val inputContent = content {
-        image(front)
-        text(prompt)
-    }
-    val text = retryAiQuota(onRetry) {
-        generativeModel.generateContent(inputContent).text?.trim()
-            ?: throw Exception("Empty response from AI")
-    }
-    val jsonStr = if (text.contains("```json")) {
-        text.substringAfter("```json").substringBefore("```").trim()
-    } else if (text.contains("```")) {
-        text.substringAfter("```").substringBeforeLast("```").trim()
-    } else {
-        text
-    }
-    val json = JSONObject(jsonStr)
-    val name = json.getString("name").trim()
-    if (name.isEmpty() || name.equals("Unknown", ignoreCase = true)) {
-        throw Exception("Model gemini-3.5-flash-lite returned Unknown name.")
-    }
-    require(json.getInt("dex_number") > 0 && json.getString("rarity").isNotBlank()) { "Incomplete identification" }
-    json
+    return requestCardJson(prompt, listOf(front), personalGemini, onRetry)
 }
 
-suspend fun gradeCardWithGemini(
+private suspend fun gradeCardWithGemini(
     front: Bitmap,
     back: Bitmap,
+    personalGemini: PersonalGeminiSession?,
     onRetry: (attempt: Int, delayMs: Long) -> Unit = { _, _ -> }
-): JSONObject = withContext(Dispatchers.IO) {
-    val generativeModel = FirebaseAiClient.model()
-    val inputContent = content {
-        image(front)
-        image(back)
-        text(CONDITION_ESTIMATE_PROMPT)
-    }
-    val text = retryAiQuota(onRetry) {
-        generativeModel.generateContent(inputContent).text?.trim()
-            ?: throw Exception("Empty response from AI")
-    }
-    val jsonStr = if (text.contains("```json")) {
-        text.substringAfter("```json").substringBefore("```").trim()
-    } else if (text.contains("```")) {
-        text.substringAfter("```").substringBeforeLast("```").trim()
-    } else {
-        text
-    }
-    val json = JSONObject(jsonStr)
+): JSONObject {
+    val json = requestCardJson(CONDITION_ESTIMATE_PROMPT, listOf(front, back), personalGemini, onRetry)
     parseConditionEstimate(json)
-    json
+    return json
+}
+
+private suspend fun requestCardJson(
+    prompt: String,
+    photos: List<Bitmap>,
+    personalGemini: PersonalGeminiSession?,
+    onRetry: (attempt: Int, delayMs: Long) -> Unit
+): JSONObject {
+    val personal = personalGemini?.client?.value
+    val answer = withContext(Dispatchers.IO) {
+        if (personal != null) {
+            val images = photos.map { photo ->
+                val scale = minOf(1f, 2560f / maxOf(photo.width, photo.height))
+                val scaled = if (scale < 1f) Bitmap.createScaledBitmap(
+                    photo, (photo.width * scale).toInt().coerceAtLeast(1), (photo.height * scale).toInt().coerceAtLeast(1), true
+                ) else photo
+                try {
+                    val jpeg = ByteArrayOutputStream()
+                    check(scaled.compress(Bitmap.CompressFormat.JPEG, 90, jpeg)) { "Couldn't prepare the photo for scanning." }
+                    Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP)
+                } finally {
+                    if (scaled !== photo) scaled.recycle()
+                }
+            }
+            check(personal === personalGemini?.client?.value) { "The Gemini key changed. Try scanning again or use manual entry." }
+            personal.generateContent(prompt, images)
+        } else {
+            val model = FirebaseAiClient.model()
+            val input = content {
+                photos.forEach { image(it) }
+                text(prompt)
+            }
+            retryAiQuota(onRetry) {
+                model.generateContent(input).text?.trim()
+                    ?: throw IllegalStateException("Empty response from AI")
+            }
+        }
+    }
+    return try {
+        JSONObject(answer.removePrefix("```json").removePrefix("```").removeSuffix("```").trim())
+    } catch (_: JSONException) {
+        throw IllegalStateException("Gemini returned an unreadable result. You can enter the card manually.")
+    }
 }
 
 @Composable
@@ -585,14 +713,6 @@ fun CameraViewfinder(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!FirebaseAiClient.isReady) {
-                    Text(
-                        "AI scanning is unavailable in this build. Use manual entry.",
-                        color = Color.White,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -706,7 +826,8 @@ fun PokemonNameField(
     value: String,
     allNames: List<String>,
     onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    label: String = "Pokémon Name"
 ) {
     val suggestions = remember(value, allNames) {
         PokeApiClient.searchPokemon(value, allNames, limit = 6)
@@ -729,7 +850,7 @@ fun PokemonNameField(
                 onValueChange(it)
                 expanded = true
             },
-            label = { Text("Pokémon Name", color = Color.Gray) },
+            label = { Text(label, color = Color.Gray) },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
@@ -851,7 +972,20 @@ fun ConfirmationScreen(
     catalogNumberHint: String = "",
     onGradeDetailsChange: (String) -> Unit = {},
     onNotesChange: (String) -> Unit = {},
-    onCatalogSelected: (CatalogCard?) -> Unit = {}
+    personalGemini: PersonalGeminiSession? = null,
+    onCatalogSelected: (CatalogCard?) -> Unit = {},
+    speciesName: String = "",
+    form: String = "",
+    cardLanguage: String = "",
+    catalogLocale: String = "en",
+    catalogVariant: String = "",
+    onSpeciesNameChange: (String) -> Unit = {},
+    onFormChange: (String) -> Unit = {},
+    onCardLanguageChange: (String) -> Unit = {},
+    onCatalogLocaleChange: (String) -> Unit = {},
+    onCatalogVariantChange: (String) -> Unit = {},
+    onCatalogSetHintChange: (String) -> Unit = {},
+    onCatalogNumberHintChange: (String) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
@@ -969,14 +1103,16 @@ fun ConfirmationScreen(
             if (grade == 0.0 && !isGrading) {
                 Button(
                     onClick = {
-                        if (frontBitmap != null && backBitmap != null) {
+                        if (!isGrading && frontBitmap != null && backBitmap != null) {
                             isGrading = true
                             coroutineScope.launch {
                                 try {
-                                    val estimate = parseConditionEstimate(gradeCardWithGemini(frontBitmap, backBitmap))
+                                    val estimate = parseConditionEstimate(gradeCardWithGemini(frontBitmap, backBitmap, personalGemini))
                                     onGradeChange(estimate.grade?.toString() ?: "")
                                     onCritiqueChange(estimate.evidence)
                                     onGradeDetailsChange(estimate.detailsJson)
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     onGradeChange("")
                                     onCritiqueChange("Condition estimate unavailable: " + e.message)
@@ -1017,18 +1153,61 @@ fun ConfirmationScreen(
 
         // Pokémon Name with autocomplete
         PokemonNameField(
-            value = if (isManual) name else name.capitalize(),
+            value = name,
             allNames = allPokemonNames,
             onValueChange = onNameChange,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            label = "Printed card name"
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = speciesName,
+            onValueChange = onSpeciesNameChange,
+            label = { Text("Species name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = form,
+            onValueChange = onFormChange,
+            label = { Text("Regional form") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        TcgDexLanguagePicker(
+            "Physical card language",
+            cardLanguage.takeIf(TcgDexLocale::isSupported).orEmpty(),
+            onCardLanguageChange
+        )
+        if (!TcgDexLocale.isSupported(cardLanguage)) {
+            OutlinedTextField(
+                value = cardLanguage,
+                onValueChange = onCardLanguageChange,
+                label = { Text("Other physical language") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        TcgDexLanguagePicker("Catalog language", catalogLocale, onCatalogLocaleChange)
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(catalogSetHint, onCatalogSetHintChange, label = { Text("Printed set name") }, modifier = Modifier.weight(1f), singleLine = true)
+            OutlinedTextField(catalogNumberHint, onCatalogNumberHintChange, label = { Text("Printed card number") }, modifier = Modifier.weight(1f), singleLine = true)
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(catalogVariant, onCatalogVariantChange, label = { Text("Catalog card variant / finish") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Spacer(modifier = Modifier.height(12.dp))
         CatalogSetPicker(
             name = name,
             selected = catalogCard,
             setHint = catalogSetHint,
             numberHint = catalogNumberHint,
+            locale = catalogLocale,
+            identityKey = "$speciesName|$form|$cardLanguage",
             onSelected = onCatalogSelected
         )
         Spacer(modifier = Modifier.height(12.dp))

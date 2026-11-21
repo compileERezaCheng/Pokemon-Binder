@@ -2,22 +2,113 @@ package com.example.pokemongrader.ui.details
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.DataRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
 class CardDetailsScreenTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun savedPrintingShowsSpeciesPhysicalLanguageAndCatalogLanguageSeparately() {
+        compose.setContent {
+            MaterialTheme {
+                CardDetailsScreen(1, 1, "today", FakeRepository(), {}, copyId = "copy-1")
+            }
+        }
+
+        compose.onNodeWithText("Species name").assertIsDisplayed()
+        compose.onNodeWithText("Regional form").assertIsDisplayed()
+        compose.onNodeWithText("Physical card language").assertIsDisplayed()
+        compose.onNodeWithText("Catalog language").assertIsDisplayed()
+        compose.onNodeWithText("Zorua").assertIsDisplayed()
+        compose.onNodeWithText("Hisuian").assertIsDisplayed()
+        compose.onAllNodesWithText("Japanese").assertCountEquals(2)
+        compose.onNodeWithText("Market Prices").assertIsDisplayed()
+    }
+
+    @Test
+    fun marketActionReturnsSavedCardWithoutChangingCollection() {
+        val repository = FakeRepository()
+        var marketCard: Card? = null
+
+        compose.setContent {
+            MaterialTheme {
+                CardDetailsScreen(1, 1, "today", repository, {}, copyId = "copy-1", onNavigateToMarket = { marketCard = it })
+            }
+        }
+
+        compose.onNodeWithText("Market Prices").performClick()
+        compose.runOnIdle {
+            assertEquals(repository.originalCard, marketCard)
+            assertNull(repository.updatedCard)
+            assertEquals(repository.originalCard, repository.cards.value.single())
+        }
+    }
+
+    @Test
+    fun identityEditCanBeCancelledWithoutChangingSavedCard() {
+        val repository = FakeRepository()
+        compose.setContent {
+            MaterialTheme {
+                CardDetailsScreen(1, 1, "today", repository, {}, copyId = "copy-1")
+            }
+        }
+
+        compose.onNodeWithText("Edit identity").performClick()
+        compose.onNodeWithTag("printed-name").performTextClearance()
+        compose.onNodeWithTag("printed-name").performTextInput("Changed name")
+        compose.onNodeWithText("Cancel").performClick()
+
+        compose.runOnIdle {
+            assertNull(repository.updatedCard)
+            assertEquals(repository.originalCard, repository.cards.value.single())
+        }
+    }
+
+    @Test
+    fun changingPhysicalLanguageAndSavingKeepsCatalogLanguageSeparateAndClearsOldPrinting() {
+        val repository = FakeRepository()
+        compose.setContent {
+            MaterialTheme {
+                CardDetailsScreen(1, 1, "today", repository, {}, copyId = "copy-1")
+            }
+        }
+
+        compose.onNodeWithText("Edit identity").performClick()
+        compose.onNodeWithText("Physical card language").performClick()
+        compose.onNodeWithText("English (en)").performClick()
+        compose.onNodeWithText("Save identity").performClick()
+        compose.waitUntil(5_000) { repository.updatedCard != null }
+
+        compose.runOnIdle {
+            val saved = repository.updatedCard!!
+            assertEquals("en", saved.cardLanguage)
+            assertEquals("ja", saved.catalogLocale)
+            assertEquals("", saved.catalogCardId)
+            assertEquals("", saved.catalogProvider)
+            assertEquals("Black Bolt", saved.setName)
+            assertEquals("1", saved.cardNumber)
+            assertEquals("copy-1", saved.copyId)
+        }
+    }
 
     @Test
     fun failedDeleteKeepsTheDetailsOpenAndShowsTheSyncError() {
@@ -45,9 +136,13 @@ class CardDetailsScreenTest {
     }
 
     private class FakeRepository : DataRepository {
-        private val card = Card(1, 1, 25, "Pikachu", "Normal", "NM", "", "today", copyId = "copy-1")
+        val originalCard = Card(1, 1, 570, "ヒスイゾロア", "Normal", "NM", "", "today", copyId = "copy-1",
+            speciesName = "Zorua", form = "Hisuian", cardLanguage = "ja", catalogProvider = "TCGdex",
+            catalogLocale = "ja", catalogCardId = "sv10-1", setId = "sv10", setName = "Black Bolt", cardNumber = "1")
+        private val mutableCards = MutableStateFlow(listOf(originalCard))
+        var updatedCard: Card? = null
         override val isLoggedIn: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
-        override val cards: StateFlow<List<Card>> = MutableStateFlow(listOf(card)).asStateFlow()
+        override val cards: StateFlow<List<Card>> = mutableCards.asStateFlow()
         override val isLoading: StateFlow<Boolean> = MutableStateFlow(false).asStateFlow()
         override val errorMessage = MutableStateFlow<String?>(null)
         override val username: StateFlow<String> = MutableStateFlow("Trainer").asStateFlow()
@@ -61,7 +156,11 @@ class CardDetailsScreenTest {
         override suspend fun login(email: String, password: String) = true
         override suspend fun register(email: String, password: String) = true
         override suspend fun addCard(card: Card) = true
-        override suspend fun updateCard(card: Card) = true
+        override suspend fun updateCard(card: Card): Boolean {
+            updatedCard = card
+            mutableCards.value = listOf(card)
+            return true
+        }
         override suspend fun removeCard(card: Card): Boolean {
             errorMessage.value = "Conflict detected. Your local delete is saved for recovery."
             return false

@@ -1,6 +1,7 @@
 package com.example.pokemongrader.data
 
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -80,6 +81,39 @@ class FirebaseClientTest {
     }
 
     @Test
+    fun firebaseWritePreservesLocalizedPrintingAndImageFields() = runTest {
+        val requests = mutableListOf<RecordingConnection>()
+        FirebaseClient.databaseUrl = "https://firebase.test"
+        FirebaseClient.connectionFactory = { RecordingConnection(it).also(requests::add) }
+        val card = Card(
+            page = 64, slot = 3, dexNumber = 570, name = "ヒスイゾロア", type = "Rare", condition = "NM",
+            notes = "fixture", dateAdded = "today", copyId = "copy-ja-1", speciesName = "Zorua",
+            form = "Hisuian", cardLanguage = "ja", catalogProvider = "TCGdex", catalogLocale = "ja",
+            catalogCardId = "sv10-1", setId = "sv10", setName = "Black Bolt", cardNumber = "1",
+            catalogVariant = "normal", catalogRarity = "Common",
+            imageUrl = "https://assets.tcgdex.net/ja/sv/sv10/1/low.webp", imageSource = "TCGdex"
+        )
+
+        FirebaseClient.saveCollection("unit-user", "unit-token", listOf(card))
+
+        val payload = JSONObject(requests.single { it.requestMethod == "PUT" }.body())
+        assertEquals("ヒスイゾロア", payload.optString("Name"))
+        assertEquals("Zorua", payload.optString("Species Name"))
+        assertEquals("Hisuian", payload.optString("Form"))
+        assertEquals("ja", payload.optString("Card Language"))
+        assertEquals("TCGdex", payload.optString("Catalog Provider"))
+        assertEquals("ja", payload.optString("Catalog Locale"))
+        assertEquals("sv10-1", payload.optString("Catalog Card ID"))
+        assertEquals("sv10", payload.optString("Set ID"))
+        assertEquals("Black Bolt", payload.optString("Set Name"))
+        assertEquals("1", payload.optString("Card Number"))
+        assertEquals("normal", payload.optString("Catalog Variant"))
+        assertEquals("Common", payload.optString("Catalog Rarity"))
+        assertEquals("https://assets.tcgdex.net/ja/sv/sv10/1/low.webp", payload.optString("Image URL"))
+        assertEquals("TCGdex", payload.optString("Image Source"))
+    }
+
+    @Test
     fun collectionFetchChecksTheVersionedPathBeforeLegacyData() = runTest {
         val requests = mutableListOf<RecordingConnection>()
         FirebaseClient.databaseUrl = "https://firebase.test"
@@ -121,5 +155,6 @@ class FirebaseClientTest {
         override fun getRequestProperty(key: String) = headers[key]
         override fun getHeaderField(name: String) = if (name.equals("ETag", true)) "null_etag" else null
         fun requestProperty(key: String) = headers[key]
+        fun body() = requestBody.toString("UTF-8")
     }
 }

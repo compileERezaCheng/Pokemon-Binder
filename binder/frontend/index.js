@@ -39,8 +39,11 @@ let selectedCatalogCard = null;
 let previewRarityClass = "Normal";
 let catalogSearchRevision = 0;
 let catalogSelectionRevision = 0;
-let catalogSetNames = null;
-let catalogSetDetails = null;
+let catalogSearchTimer = null;
+const catalogSetNames = new Map();
+const catalogSetDetails = new Map();
+const catalogPokemonNames = new Map();
+const pendingCatalogPokemonNames = new Map();
 const catalogImageFallbackCache = new Map();
 let modalSelectedCatalogCard = null;
 let modalSavedCatalogCard = null;
@@ -50,7 +53,32 @@ let modalArtworkRevision = 0;
 let modalArtworkUrl = "";
 let modalArtworkIsCard = false;
 let modalNotesRevision = 0;
-const TCGDEX_API = "https://api.tcgdex.net/v2/en";
+const TCGDEX_API = "https://api.tcgdex.net/v2";
+const POKEBINDER_TCGDEX_LOCALES = new Set(["en", "fr", "es", "it", "pt", "pt-br", "pt-pt", "de", "nl", "pl", "ru", "ja", "ko", "zh-tw", "id", "th", "zh-cn"]);
+const TCGDEX_LOCALE_LABELS = {
+    en: "English", ja: "Japanese", "pt-br": "Portuguese, Brazil", "pt-pt": "Portuguese, Portugal",
+    pt: "Portuguese", fr: "French", de: "German", es: "Spanish", it: "Italian", ko: "Korean",
+    "zh-tw": "Chinese, Traditional", "zh-cn": "Chinese, Simplified", id: "Indonesian", th: "Thai",
+    nl: "Dutch", pl: "Polish", ru: "Russian"
+};
+
+function tcgDexBase(locale = "en") {
+    if (!POKEBINDER_TCGDEX_LOCALES.has(locale)) throw new Error("Unsupported catalog language");
+    return `${TCGDEX_API}/${locale}`;
+}
+
+function catalogLocaleLabel(locale) { return TCGDEX_LOCALE_LABELS[locale] || locale; }
+
+function initializeCatalogLocalePickers() {
+    const template = document.getElementById("tcgdex-locale-options");
+    if (!template?.content) return;
+    document.querySelectorAll("[data-tcgdex-locale]").forEach(select => {
+        const previous = select.value || "en";
+        select.replaceChildren(template.content.cloneNode(true));
+        select.value = POKEBINDER_TCGDEX_LOCALES.has(previous) ? previous : "en";
+    });
+}
+initializeCatalogLocalePickers();
 
 // Autocomplete navigation state
 let autocompleteSelectedIndex = -1;
@@ -301,12 +329,13 @@ function scheduleMarketSearch() {
 async function searchMarket(revision) {
     const status = document.getElementById('market-status');
     const name = document.getElementById('market-name').value.trim();
+    const locale = document.getElementById('market-locale').value || 'en';
     if (!name) { status.textContent = 'Search a card name to discover its editions.'; return; }
     const setPicker = document.getElementById('market-set');
     const number = document.getElementById('market-number').value.trim().toLowerCase().split('/')[0];
     try {
-        const result = await marketClient.get('cards?name=' + encodeURIComponent(name));
-        const sets = await marketClient.get('sets');
+        const result = await marketClient.get('cards?name=' + encodeURIComponent(name), false, locale);
+        const sets = await marketClient.get('sets', false, locale);
         if (!marketLatest.isCurrent(revision)) return;
         if (!Array.isArray(result.data) || !Array.isArray(sets.data)) throw new Error('Invalid catalog response');
         const names = Object.fromEntries(sets.data.map(s => [s.id, s.name]));
@@ -320,7 +349,7 @@ async function searchMarket(revision) {
             option.textContent = id ? names[id] || id : 'All sets'; setPicker.appendChild(option);
         }
         setPicker.value = setIds.includes(previousSet) ? previousSet : '';
-        marketCards = candidates.map(c => ({ ...c, setName: names[c.setId] || c.setId }))
+        marketCards = candidates.map(c => ({ ...c, locale, provider: 'TCGdex', setName: names[c.setId] || c.setId }))
             .filter(c => (!setPicker.value || c.setId === setPicker.value) &&
                 (!number || String(c.localId).toLowerCase() === number))
             .sort((a, b) => a.setName.localeCompare(b.setName) || a.number.localeCompare(b.number, undefined, { numeric: true }));
@@ -351,12 +380,12 @@ async function loadMoreMarket(revision = marketLatest.revision) {
         button.setAttribute('aria-pressed', marketSelected?.id === card.id ? 'true' : 'false');
         const image = document.createElement('img');
         image.alt = ''; image.loading = 'lazy';
-        const url = catalogImageUrl(card.image, 'low');
+        const url = catalogImageUrl(card.image, 'low', card.locale);
         if (url) image.src = url;
         else { image.hidden = true; button.classList.add('market-no-art'); }
         image.addEventListener('error', () => { image.hidden = true; button.classList.add('market-no-art'); });
         const text = document.createElement('span'); text.className = 'market-result-name';
-        text.textContent = `${card.name}\n${card.setName} · #${card.number}`;
+        text.textContent = `${card.name}\n${catalogLocaleLabel(card.locale)} · ${card.setName} · #${card.number}`;
         const preview = document.createElement('span'); preview.className = 'market-result-price'; preview.textContent = 'Checking price…';
         button.append(image, text, preview);
         button.addEventListener('click', () => selectMarketCard(card));
@@ -370,7 +399,7 @@ async function loadMoreMarket(revision = marketLatest.revision) {
             const card = batch[next++];
             const entry = marketEntries.get(card.id);
             try {
-                const result = await marketClient.get('cards/' + encodeURIComponent(card.id));
+                const result = await marketClient.get('cards/' + encodeURIComponent(card.id), false, card.locale);
                 if (!marketLatest.isCurrent(revision)) return;
                 const quote = groupMarketPrices(parsePrices(result.data, card, result.consulted))[0]?.primary;
                 entry.preview.textContent = quote ? `${marketMoney(quote)} · ${quote.type}${result.stale ? ' · Outdated' : ''}` : 'No quote from provider';
@@ -404,12 +433,13 @@ async function selectMarketCard(selected, refresh = false) {
     document.getElementById('market-details').hidden = false;
     document.getElementById('market-quote-controls').hidden = true;
     document.getElementById('market-detail-retry').hidden = true;
-    document.getElementById('market-card-name').textContent = selected.name;
-    document.getElementById('market-card-set').textContent = `${selected.setName} · #${selected.number}`;
+    document.getElementById('market-card-name').textContent = selected.name || 'Saved printing';
+    document.getElementById('market-card-set').textContent = [selected.setName || selected.setId, selected.number && `#${selected.number}`].filter(Boolean).join(' · ');
+    document.getElementById('market-catalog-label').textContent = `TCGdex · ${catalogLocaleLabel(selected.locale)} (${selected.locale}) · sale language unspecified`;
     document.getElementById('market-price-value').textContent = '…';
     document.getElementById('market-price-type').textContent = 'Price reference';
     const image = document.getElementById('market-card-image');
-    const artwork = catalogImageUrl(selected.image, 'low');
+    const artwork = catalogImageUrl(selected.image, 'low', selected.locale);
     image.hidden = !artwork; image.alt = selected.name;
     document.getElementById('market-art-empty').hidden = !!artwork;
     image.onerror = () => { image.hidden = true; document.getElementById('market-art-empty').hidden = false; };
@@ -418,10 +448,29 @@ async function selectMarketCard(selected, refresh = false) {
     status.textContent = 'Loading price…';
     if (window.matchMedia?.('(max-width: 900px)').matches) document.getElementById('market-prices').scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
-        const result = await marketClient.get('cards/' + encodeURIComponent(selected.id), refresh);
+        const result = await marketClient.get('cards/' + encodeURIComponent(selected.id), refresh, selected.locale);
         if (!marketDetailLatest.isCurrent(revision)) return;
+        if (result.data?.id !== selected.id || (selected.setId && result.data.set?.id !== selected.setId) ||
+            (selected.number && String(result.data.localId) !== String(selected.number))) {
+            throw new Error('The catalog response did not match the saved printing.');
+        }
+        selected = marketSelected = {
+            ...selected,
+            name: result.data.name || selected.name,
+            setId: result.data.set?.id || selected.setId,
+            setName: result.data.set?.name || selected.setName || selected.setId,
+            number: String(result.data.localId ?? selected.number ?? ''),
+            image: result.data.image || selected.image
+        };
+        document.getElementById('market-card-name').textContent = selected.name || 'Saved printing';
+        document.getElementById('market-card-set').textContent = [selected.setName || selected.setId, selected.number && `#${selected.number}`].filter(Boolean).join(' · ');
+        const resolvedArtwork = catalogImageUrl(selected.image, 'low', selected.locale);
+        image.alt = selected.name;
+        image.hidden = !resolvedArtwork;
+        document.getElementById('market-art-empty').hidden = !!resolvedArtwork;
+        if (resolvedArtwork) image.src = resolvedArtwork;
         marketGroups = groupMarketPrices(parsePrices(result.data, selected, result.consulted)).map(group => ({ ...group, stale: result.stale, error: result.error }));
-        const detailedArtwork = catalogImageUrl(result.data.image, 'low');
+        const detailedArtwork = catalogImageUrl(result.data.image, 'low', selected.locale);
         if (detailedArtwork && detailedArtwork !== artwork) {
             image.hidden = false; document.getElementById('market-art-empty').hidden = true; image.src = detailedArtwork;
         }
@@ -879,7 +928,7 @@ function quickAddCard(page, slot) {
 
 // ==================== COLLECTION TABLE VIEW ====================
 function getCardImageSource(card) {
-    const imageUrl = catalogImageUrl(card["Image URL"], "high");
+    const imageUrl = catalogImageUrl(card["Image URL"], "high", card["Catalog Locale"]);
     if (imageUrl) return imageUrl;
     if (card["Catalog Card ID"]) return "";
     return card["Dex Number"] > 0
@@ -894,6 +943,9 @@ async function persistCardImageMatch(card, printing, match) {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 copy_id: card["Copy ID"], catalog_card_id: printing.id, set_id: printing.setId,
+                catalog_provider: printing.provider || card["Catalog Provider"] || "TCGdex",
+                catalog_locale: printing.locale || card["Catalog Locale"] || "",
+                catalog_variant: printing.variant || card["Catalog Variant"] || "",
                 set_name: printing.setName, card_number: printing.number, catalog_rarity: printing.rarity,
                 image_url: match.imageUrl, image_source: match.imageSource, image_match_id: match.imageMatchId
             })
@@ -901,6 +953,9 @@ async function persistCardImageMatch(card, printing, match) {
         const data = await response.json();
         if (!data.success) return;
         Object.assign(card, {
+            "Catalog Provider": printing.provider || card["Catalog Provider"] || "TCGdex",
+            "Catalog Locale": printing.locale || card["Catalog Locale"] || "",
+            "Catalog Variant": printing.variant || card["Catalog Variant"] || "",
             "Catalog Card ID": printing.id, "Set ID": printing.setId, "Set Name": printing.setName,
             "Card Number": printing.number, "Catalog Rarity": printing.rarity,
             "Image URL": match.imageUrl, "Image Source": match.imageSource, "Image Match ID": match.imageMatchId
@@ -912,7 +967,7 @@ async function persistCardImageMatch(card, printing, match) {
 
 async function resolveCardArtwork(container, card) {
     if (!card || !card["Catalog Card ID"] || card["Image Source"] === "Scrydex") return;
-    const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"] });
+    const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"], locale: card["Catalog Locale"] });
     if (!match) {
         const placeholder = container.querySelector(".image-unavailable") || container.firstChild;
         if (placeholder) placeholder.textContent = "Imagem indisponível";
@@ -969,9 +1024,10 @@ function getCardRarity(card) {
 }
 
 function isPokemonCardNameMatch(cardName, pokemonName) {
-    const normalize = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
-    let candidate = normalize(cardName).split(" ");
+    const normalize = value => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "")
+        .toLocaleLowerCase().replace(/[^\p{L}\p{N}♀♂]+/gu, " ").trim().replace(/\s+/g, " ");
+    const withoutCardSuffix = String(cardName || "").trim().replace(/(?:\s|-)?(?:vmax|vstar|break|ex|gx|v)$/iu, "");
+    let candidate = normalize(withoutCardSuffix).split(" ");
     const target = normalize(pokemonName);
     if (!target || !candidate.length) return false;
     const isMega = ["m", "mega"].includes(candidate[0]);
@@ -982,14 +1038,64 @@ function isPokemonCardNameMatch(cardName, pokemonName) {
     return name === target;
 }
 
+const POKEAPI_LANGUAGES = {
+    en: "en", fr: "fr", es: "es", it: "it", ja: "ja", ko: "ko", de: "de", nl: "nl", pl: "pl",
+    ru: "ru", id: "id", th: "th", pt: "pt", "pt-br": "pt-br", "pt-pt": "pt",
+    "zh-tw": "zh-hant", "zh-cn": "zh-hans"
+};
+const REGIONAL_FORM_SLUGS = { Alolan: "alola", Galarian: "galar", Hisuian: "hisui", Paldean: "paldea" };
+
+async function fetchPokemonResource(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("PokéAPI request failed");
+    return response.json();
+}
+
+async function resolveCatalogPokemonName(pokemon, form, locale) {
+    if (!pokemon?.id) return null;
+    const language = POKEAPI_LANGUAGES[locale];
+    if (!language) return null;
+    const key = `${pokemon.id}:${form || "Normal"}:${locale}`;
+    if (catalogPokemonNames.has(key)) return catalogPokemonNames.get(key);
+    if (pendingCatalogPokemonNames.has(key)) return pendingCatalogPokemonNames.get(key);
+    const request = (async () => {
+        const species = await fetchPokemonResource(`https://pokeapi.co/api/v2/pokemon-species/${pokemon.id}/`);
+        let names = species.names;
+        if (form && form !== "Normal") {
+            const region = REGIONAL_FORM_SLUGS[form];
+            if (!region) return null;
+            const varieties = (species.varieties || []).filter(item =>
+                item.pokemon?.name?.includes(`-${region}`));
+            if (varieties.length !== 1) return null;
+            const regionalPokemon = await fetchPokemonResource(varieties[0].pokemon.url);
+            const formUrl = regionalPokemon.forms?.[0]?.url;
+            if (!formUrl) return null;
+            const regionalForm = await fetchPokemonResource(formUrl);
+            names = regionalForm.names;
+        }
+        return names?.find(item => item.language?.name === language)?.name || null;
+    })();
+    pendingCatalogPokemonNames.set(key, request);
+    try {
+        const name = await request;
+        catalogPokemonNames.set(key, name);
+        return name;
+    } finally {
+        pendingCatalogPokemonNames.delete(key);
+    }
+}
+
 async function resolveCatalogImageFallback(card) {
     const id = String(card && card.id || "");
-    if (!id) return null;
-    if (catalogImageFallbackCache.has(id)) return await catalogImageFallbackCache.get(id);
+    const locale = String(card && (card.locale || card["Catalog Locale"]) || "");
+    const provider = String(card && (card.provider || card["Catalog Provider"]) || "TCGdex");
+    if (!id || provider !== "TCGdex" || locale !== "en") return null;
+    const key = `${provider}:${locale}:${id}`;
+    if (catalogImageFallbackCache.has(key)) return await catalogImageFallbackCache.get(key);
     const request = (async () => {
         const response = await fetch("/api/catalog-image-fallback", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tcgdex_card_id: id })
+            body: JSON.stringify({ tcgdex_card_id: id, provider, locale })
         });
         if (!response.ok) throw new Error("Fallback image service unavailable");
         const data = await response.json();
@@ -998,13 +1104,13 @@ async function resolveCatalogImageFallback(card) {
             imageUrl: data.match.image_url, imageSource: "Scrydex", imageMatchId: data.match.card_id
         } : null;
     })();
-    catalogImageFallbackCache.set(id, request);
+    catalogImageFallbackCache.set(key, request);
     try {
         const match = await request;
-        catalogImageFallbackCache.set(id, match);
+        catalogImageFallbackCache.set(key, match);
         return match;
     } catch (_) {
-        catalogImageFallbackCache.delete(id);
+        catalogImageFallbackCache.delete(key);
         return null;
     }
 }
@@ -1025,11 +1131,11 @@ const catalogSetSeriesOverrides = {
     swsh12tg: "swsh", "swsh12.5tg": "swsh"
 };
 
-function catalogImageUrl(value, quality = "high") {
+function catalogImageUrl(value, quality = "high", expectedLocale = "") {
     const url = String(value || "").trim();
-    if (/^https:\/\/images\.scrydex\.com\/pokemon\/[^/?#]+\/(?:small|medium|large)$/i.test(url)) return url;
+    if (/^https:\/\/images\.scrydex\.com\/pokemon\/[^/?#]+\/(?:small|medium|large)$/i.test(url)) return !expectedLocale || expectedLocale === "en" ? url : "";
     const match = url.match(/^https:\/\/assets\.tcgdex\.net\/([a-z]{2}(?:-[a-z]{2})?)\/([^/]+)\/([^/]+)\/([^/]+)(?:\/(?:high|low)\.(?:png|webp|jpe?g))?$/i);
-    if (!match || /^(?:logo|symbol)(?:\.[a-z]+)?$/i.test(match[4])) return "";
+    if (!match || (expectedLocale && match[1].toLowerCase() !== expectedLocale) || /^(?:logo|symbol)(?:\.[a-z]+)?$/i.test(match[4])) return "";
     const size = quality === "low" ? "low.webp" : "high.png";
     return `https://assets.tcgdex.net/${match[1]}/${match[2]}/${match[3]}/${match[4]}/${size}`;
 }
@@ -1041,8 +1147,8 @@ function getCatalogSetId(card) {
     return localId && id.endsWith("-" + localId) ? id.slice(0, -localId.length - 1) : "";
 }
 
-function resolveCatalogImageUrl(card, setDetails = catalogSetDetails) {
-    const source = catalogImageUrl(card.image, "low");
+function resolveCatalogImageUrl(card, setDetails = {}, locale = card.locale || "en") {
+    const source = catalogImageUrl(card.image, "low", locale);
     if (source) return source;
     const setId = getCatalogSetId(card);
     const localId = String(card.localId || "").trim();
@@ -1050,7 +1156,7 @@ function resolveCatalogImageUrl(card, setDetails = catalogSetDetails) {
         (setDetails && setDetails[setId] && setDetails[setId].seriesId) || catalogSetSeriesOverrides[setId];
     if (!setId || !localId || !seriesId) return "";
     const assetSetId = catalogImageSetAliases[setId] || setId;
-    return catalogImageUrl(`https://assets.tcgdex.net/en/${seriesId}/${assetSetId}/${localId}`, "low");
+    return catalogImageUrl(`https://assets.tcgdex.net/${locale}/${seriesId}/${assetSetId}/${localId}`, "low");
 }
 
 function setCardImageFallback(img, card, onResolved = () => {}) {
@@ -1059,7 +1165,7 @@ function setCardImageFallback(img, card, onResolved = () => {}) {
     img.onerror = async () => {
         if (card["Catalog Card ID"]) {
             if (card["Image Source"] !== "Scrydex") {
-                const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"] });
+                const match = await resolveCatalogImageFallback({ id: card["Catalog Card ID"], locale: card["Catalog Locale"] });
                 if (match) {
                     img.src = match.imageUrl;
                     onResolved(match);
@@ -1084,14 +1190,15 @@ function setCardImageFallback(img, card, onResolved = () => {}) {
     };
 }
 
-async function loadCatalogSetNames() {
-    if (catalogSetNames) return catalogSetNames;
-    const response = await fetch(TCGDEX_API + "/sets");
+async function loadCatalogSetNames(locale = "en") {
+    if (catalogSetNames.has(locale)) return catalogSetNames.get(locale);
+    const response = await fetch(tcgDexBase(locale) + "/sets");
     if (!response.ok) throw new Error("TCGdex sets unavailable");
     const sets = await response.json();
-    catalogSetNames = Object.fromEntries(sets.map(set => [set.id, set.name]));
-    catalogSetDetails = Object.fromEntries(sets.map(set => [set.id, { seriesId: set.serie && set.serie.id }]));
-    return catalogSetNames;
+    const names = Object.fromEntries(sets.map(set => [set.id, set.name]));
+    catalogSetNames.set(locale, names);
+    catalogSetDetails.set(locale, Object.fromEntries(sets.map(set => [set.id, { seriesId: set.serie && set.serie.id }])));
+    return names;
 }
 
 function renderCatalogOptions(cards, listId, revision) {
@@ -1177,6 +1284,8 @@ function filterCatalogOptions(listId, query) {
 
 async function searchCatalogCards(name, listId, revision) {
     const isModal = listId === "modal-set-options";
+    const locale = document.getElementById(isModal ? "modal-catalog-locale" : "add-catalog-locale").value || "en";
+    const api = tcgDexBase(locale);
     const current = () => isModal ? revision === modalCatalogRevision : revision === catalogSearchRevision;
     const status = document.getElementById(isModal ? "modal-set-status" : "add-set-status");
     const list = document.getElementById(listId);
@@ -1185,28 +1294,38 @@ async function searchCatalogCards(name, listId, revision) {
     search.value = "";
     search.hidden = true;
     document.getElementById(listId.replace("-options", "-search-empty")).classList.add("hidden");
-    status.textContent = isModal ? "A carregar edições…" : "Searching TCGdex printings for " + name + "...";
     list.replaceChildren();
+    let resolvingName = !isModal && Boolean(selectedPokemon?.id);
     try {
-        const response = await fetch(TCGDEX_API + "/cards?name=" + encodeURIComponent(name));
+        const query = isModal ? name : resolvingName
+            ? await resolveCatalogPokemonName(selectedPokemon, document.getElementById("add-form").value, locale)
+            : name;
+        if (!current()) return;
+        if (!query) {
+            status.textContent = `No ${catalogLocaleLabel(locale)} name is available for this Pokémon or form. You can still add it without a TCGdex printing.`;
+            return;
+        }
+        resolvingName = false;
+        status.textContent = isModal ? "A carregar edições…" : `Searching ${catalogLocaleLabel(locale)} TCGdex printings for ${query}...`;
+        const response = await fetch(api + "/cards?name=" + encodeURIComponent(query));
         if (!response.ok) throw new Error("TCGdex search failed");
         const records = await response.json();
-        const matching = records.filter(card => isPokemonCardNameMatch(card.name, name));
+        const matching = records.filter(card => isPokemonCardNameMatch(card.name, query));
         let sets = {};
-        try { sets = await loadCatalogSetNames(); } catch (_) {}
+        try { sets = await loadCatalogSetNames(locale); } catch (_) {}
         if (!current()) return;
         const cards = matching.map(card => {
             const id = String(card.id || "");
             const splitAt = id.lastIndexOf("-");
             const setId = getCatalogSetId(card) || (splitAt > 0 ? id.slice(0, splitAt) : id);
             return {
-                id, name: card.name, setId, setName: sets[setId] || setId,
+                id, name: card.name, provider: "TCGdex", locale, setId, setName: sets[setId] || setId,
                 number: card.localId || "", rarity: "", imageSource: "TCGdex", imageMatchId: "",
-                imageUrl: resolveCatalogImageUrl(card, catalogSetDetails)
+                imageUrl: resolveCatalogImageUrl(card, catalogSetDetails.get(locale), locale)
             };
         });
         if (!cards.length) {
-            status.textContent = "No printings found. You can still add this Pokémon without a TCGdex set.";
+            status.textContent = `No ${catalogLocaleLabel(locale)} printings found. You can still add this Pokémon without a TCGdex set.`;
             return;
         }
         status.textContent = "Choose the matching set and card number. Leaving this blank adds only the Pokémon.";
@@ -1214,7 +1333,7 @@ async function searchCatalogCards(name, listId, revision) {
         if (isModal) {
             status.textContent = "";
             if (modalSavedCatalogCard) {
-                const savedMatch = cards.find(card => card.id === modalSavedCatalogCard.id);
+                const savedMatch = cards.find(card => card.id === modalSavedCatalogCard.id && card.locale === modalSavedCatalogCard.locale);
                 if (savedMatch) {
                     modalSavedCatalogCard = { ...modalSavedCatalogCard, imageUrl: savedMatch.imageUrl || modalSavedCatalogCard.imageUrl };
                     modalSelectedCatalogCard = modalSavedCatalogCard;
@@ -1223,11 +1342,13 @@ async function searchCatalogCards(name, listId, revision) {
                 }
             }
         }
-        const unique = chooseUniqueCatalogCard(cards, { name });
+        const unique = chooseUniqueCatalogCard(cards, { name: query });
         if (unique && !isModal) chooseCatalogCard(unique, listId, revision);
     } catch (error) {
         if (!current()) return;
-        status.replaceChildren(document.createTextNode("Could not load TCGdex printings. "));
+        status.replaceChildren(document.createTextNode(resolvingName
+            ? "Could not resolve this Pokémon name with PokéAPI. You can still add it manually. "
+            : "Could not load TCGdex printings. "));
         const button = document.createElement("button");
         button.type = "button";
         button.className = "btn-secondary";
@@ -1239,13 +1360,15 @@ async function searchCatalogCards(name, listId, revision) {
 
 async function chooseCatalogCard(candidate, listId, revision) {
     const isModal = listId === "modal-set-options";
+    const locale = candidate.locale || document.getElementById(isModal ? "modal-catalog-locale" : "add-catalog-locale").value || "en";
+    const api = tcgDexBase(locale);
     const current = () => isModal ? revision === modalCatalogRevision : revision === catalogSearchRevision;
     const selectionRevision = isModal ? ++modalSelectionRevision : ++catalogSelectionRevision;
     const selectionIsCurrent = () => current() && (isModal ? selectionRevision === modalSelectionRevision : selectionRevision === catalogSelectionRevision);
     const status = document.getElementById(isModal ? "modal-set-status" : "add-set-status");
     status.textContent = "Loading the selected TCGdex card...";
     try {
-        const response = await fetch(TCGDEX_API + "/cards/" + encodeURIComponent(candidate.id));
+        const response = await fetch(api + "/cards/" + encodeURIComponent(candidate.id));
         if (!response.ok) throw new Error("TCGdex card unavailable");
         const details = await response.json();
         if (!selectionIsCurrent()) return;
@@ -1253,12 +1376,15 @@ async function chooseCatalogCard(candidate, listId, revision) {
         const selected = {
             id: details.id || candidate.id,
             name: details.name || candidate.name,
+            provider: "TCGdex", locale,
+            variant: details.variant || candidate.variant || "",
+            speciesDex: Array.isArray(details.dexId) ? Number(details.dexId[0]) || 0 : 0,
             setId,
             setName: (details.set && details.set.name) || candidate.setName,
             number: details.localId || candidate.number,
             rarity: details.rarity || "",
-            imageUrl: candidate.imageSource === "Scrydex" ? candidate.imageUrl : catalogImageUrl(details.image, "high") || catalogImageUrl(candidate.imageUrl, "high"),
-            imageSource: candidate.imageSource === "Scrydex" ? "Scrydex" : (catalogImageUrl(details.image, "high") || catalogImageUrl(candidate.imageUrl, "high") ? "TCGdex" : ""),
+            imageUrl: candidate.imageSource === "Scrydex" ? catalogImageUrl(candidate.imageUrl, "high", locale) : catalogImageUrl(details.image, "high", locale) || catalogImageUrl(candidate.imageUrl, "high", locale),
+            imageSource: candidate.imageSource === "Scrydex" ? (catalogImageUrl(candidate.imageUrl, "high", locale) ? "Scrydex" : "") : (catalogImageUrl(details.image, "high", locale) || catalogImageUrl(candidate.imageUrl, "high", locale) ? "TCGdex" : ""),
             imageMatchId: candidate.imageSource === "Scrydex" ? candidate.imageMatchId : ""
         };
         if (isModal) {
@@ -1268,6 +1394,9 @@ async function chooseCatalogCard(candidate, listId, revision) {
             renderModalArtwork(selected.imageUrl || fallback, Boolean(selected.id), selected.imageSource, selected.imageMatchId);
         } else {
             selectedCatalogCard = selected;
+            if (selected.speciesDex > 0) selectedPokemon = { ...selectedPokemon, id: selected.speciesDex };
+            document.getElementById("preview-name").textContent = selected.name;
+            if (selected.speciesDex > 0) document.getElementById("preview-dex-id").textContent = `#${selected.speciesDex}`;
             document.getElementById("add-clear-set").disabled = false;
             const raritySelect = document.getElementById("add-type");
             if (selected.rarity) {
@@ -1286,6 +1415,7 @@ async function chooseCatalogCard(candidate, listId, revision) {
                 image.src = selected.imageUrl;
                 setCardImageFallback(image, {
                     "Dex Number": selectedPokemon ? selectedPokemon.id : 0, "Catalog Card ID": selected.id,
+                    "Catalog Provider": selected.provider, "Catalog Locale": selected.locale,
                     "Set ID": selected.setId, "Set Name": selected.setName, "Card Number": selected.number,
                     "Catalog Rarity": selected.rarity, "Image Source": selected.imageSource
                 }, match => Object.assign(selectedCatalogCard, match));
@@ -1302,6 +1432,7 @@ async function chooseCatalogCard(candidate, listId, revision) {
                             image.src = match.imageUrl;
                             setCardImageFallback(image, {
                                 "Dex Number": selectedPokemon ? selectedPokemon.id : 0, "Catalog Card ID": selected.id,
+                                "Catalog Provider": selected.provider, "Catalog Locale": selected.locale,
                                 "Set ID": selected.setId, "Set Name": selected.setName, "Card Number": selected.number,
                                 "Catalog Rarity": selected.rarity, "Image Source": selected.imageSource
                             }, resolved => Object.assign(selectedCatalogCard, resolved));
@@ -1342,6 +1473,78 @@ function clearAddCatalogCard() {
     }
 }
 
+function addCatalogQuery() {
+    const name = document.getElementById("add-search-input").value.trim();
+    const selectedForm = document.getElementById("add-form").value;
+    const regional = splitRegionalPokemonName(name);
+    const baseName = regional?.name || name;
+    const form = regional?.form || (selectedForm === "Normal" ? "" : selectedForm);
+    return form && baseName ? `${form} ${baseName}` : baseName;
+}
+
+function normalizePokemonName(value) {
+    return String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase()
+        .replace(/[^\p{L}\p{N}♀♂]+/gu, " ").trim().replace(/\s+/g, " ");
+}
+
+function splitRegionalPokemonName(value) {
+    const name = String(value || "").trim();
+    const prefix = name.match(/^(Alolan|Galarian|Hisuian|Paldean)\s+(.+)$/i);
+    if (prefix) return { form: prefix[1][0].toUpperCase() + prefix[1].slice(1).toLowerCase(), name: prefix[2].trim() };
+    const suffix = name.match(/^(.+)-(alola|galar|hisui|paldea)(?:-.+)?$/i);
+    if (!suffix) return null;
+    const form = Object.keys(REGIONAL_FORM_SLUGS).find(key => REGIONAL_FORM_SLUGS[key] === suffix[2].toLowerCase());
+    return { form, name: suffix[1].trim().replace(/-/g, " ") };
+}
+
+function findPokemonByName(name) {
+    const key = normalizePokemonName(name);
+    return pokemonLookupList.find(item => normalizePokemonName(item.name) === key) || null;
+}
+
+function invalidateAddIdentity() {
+    catalogSearchRevision++;
+    catalogSelectionRevision++;
+    clearTimeout(catalogSearchTimer);
+    selectedCatalogCard = null;
+    document.getElementById("add-set-options").replaceChildren();
+    clearAddCatalogCard();
+    const query = addCatalogQuery();
+    if (query) {
+        const revision = ++catalogSearchRevision;
+        catalogSearchTimer = setTimeout(() => searchCatalogCards(query, "add-set-options", revision), 250);
+    }
+}
+
+function changeCatalogLocale(scope) {
+    if (scope === "add") {
+        invalidateAddIdentity();
+        return;
+    }
+    if (!modalActiveCard) return;
+    invalidateModalCatalogSearch();
+    searchModalCatalogCards();
+}
+
+function invalidateModalCatalogSearch() {
+    if (!modalActiveCard) return;
+    modalCatalogRevision++;
+    modalSelectionRevision++;
+    modalSelectedCatalogCard = null;
+    document.getElementById("modal-set-options").replaceChildren();
+    updateModalPrintingUi();
+    document.getElementById("modal-set-status").textContent = "Search the selected catalog language.";
+}
+
+function searchModalCatalogCards() {
+    if (!modalActiveCard) return;
+    const query = document.getElementById("modal-catalog-name-search").value.trim();
+    invalidateModalCatalogSearch();
+    if (!query) return;
+    document.getElementById("modal-set-status").textContent = "A carregar edições…";
+    return searchCatalogCards(query, "modal-set-options", modalCatalogRevision);
+}
+
 function getSavedModalCatalogCard(card) {
     const id = String(card["Catalog Card ID"] || "");
     const setId = String(card["Set ID"] || "");
@@ -1350,8 +1553,10 @@ function getSavedModalCatalogCard(card) {
     if (!id && !setId && !setName && !number) return null;
     return {
         id, name: card.Name, setId, setName: setName || setId, number,
+        provider: card["Catalog Provider"] || "", locale: card["Catalog Locale"] || "",
+        variant: card["Catalog Variant"] || "",
         rarity: card["Catalog Rarity"] || "",
-        imageUrl: catalogImageUrl(card["Image URL"], "high"),
+        imageUrl: catalogImageUrl(card["Image URL"], "high", card["Catalog Locale"] || ""),
         imageSource: card["Image Source"] || "",
         imageMatchId: card["Image Match ID"] || ""
     };
@@ -1362,9 +1567,12 @@ function isValidCatalogPrinting(card) {
 }
 
 function modalPrintingNeedsSave() {
-    if (!isValidCatalogPrinting(modalSelectedCatalogCard)) return false;
     const saved = modalSavedCatalogCard;
+    if (!modalSelectedCatalogCard) return Boolean(saved);
+    if (!isValidCatalogPrinting(modalSelectedCatalogCard)) return false;
     return !saved || modalSelectedCatalogCard.id !== saved.id ||
+        modalSelectedCatalogCard.locale !== saved.locale ||
+        modalSelectedCatalogCard.variant !== saved.variant ||
         modalSelectedCatalogCard.imageSource !== saved.imageSource ||
         modalSelectedCatalogCard.imageMatchId !== saved.imageMatchId ||
         modalSelectedCatalogCard.imageUrl !== saved.imageUrl;
@@ -1374,10 +1582,11 @@ function renderSavedModalPrinting() {
     const saved = modalSavedCatalogCard;
     document.getElementById("modal-current-label").textContent = saved && saved.id ? "Edição guardada" : "Edição";
     document.getElementById("modal-current-set").textContent = saved ? (saved.setName || saved.setId) : "Sem edição guardada";
-    document.getElementById("modal-current-number").textContent = saved && saved.number ? "#" + saved.number : "";
+    document.getElementById("modal-current-number").textContent = saved && saved.number
+        ? `#${saved.number} · ${catalogLocaleLabel(saved.locale || "en")} (${saved.locale || "en"})` : "";
     const image = document.getElementById("modal-current-set-image");
     const placeholder = document.getElementById("modal-current-set-image-placeholder");
-    const imageUrl = saved && catalogImageUrl(saved.imageUrl, "low");
+    const imageUrl = saved && catalogImageUrl(saved.imageUrl, "low", saved.locale || "");
     image.classList.add("hidden");
     placeholder.textContent = imageUrl ? "A carregar imagem…" : "Imagem indisponível";
     placeholder.classList.remove("hidden");
@@ -1413,8 +1622,8 @@ function renderModalArtwork(url, isCardImage, imageSource = "TCGdex", imageMatch
     const placeholder = document.getElementById("modal-card-artwork-placeholder");
     const button = document.getElementById("modal-card-artwork-button");
     const revision = ++modalArtworkRevision;
-    const source = isCardImage ? catalogImageUrl(url, "high") : String(url || "");
     const printing = modalSelectedCatalogCard || modalSavedCatalogCard;
+    const source = isCardImage ? catalogImageUrl(url, "high", printing?.locale || "") : String(url || "");
     modalArtworkUrl = "";
     modalArtworkIsCard = false;
     image.classList.add("hidden");
@@ -1481,7 +1690,8 @@ function updateModalPrintingUi() {
     save.disabled = !dirty;
     const pending = document.getElementById("modal-pending-set");
     pending.textContent = dirty
-        ? (modalSavedCatalogCard && modalSelectedCatalogCard.id === modalSavedCatalogCard.id ? "Origem da imagem por guardar: " : "Nova edição por guardar: ") + modalSelectedCatalogCard.setName + " · #" + modalSelectedCatalogCard.number
+        ? !modalSelectedCatalogCard ? "Remoção da edição por guardar."
+            : (modalSavedCatalogCard && modalSelectedCatalogCard.id === modalSavedCatalogCard.id ? "Origem da imagem por guardar: " : "Nova edição por guardar: ") + modalSelectedCatalogCard.setName + " · #" + modalSelectedCatalogCard.number
         : "";
     if (dirty) pending.classList.remove("hidden");
     else pending.classList.add("hidden");
@@ -1511,10 +1721,20 @@ function cancelModalCatalogSelection() {
         option.setAttribute("aria-selected", modalSelectedCatalogCard && option.dataset.catalogCardId === modalSelectedCatalogCard.id ? "true" : "false"));
 }
 
+function clearModalCatalogCard() {
+    modalSelectionRevision++;
+    modalSelectedCatalogCard = null;
+    updateModalPrintingUi();
+    renderModalArtwork("", false);
+    Array.from(document.getElementById("modal-set-options").children).forEach(option => option.setAttribute("aria-selected", "false"));
+}
+
 function loadModalCatalogOptions(card) {
     modalCatalogRevision++;
     modalSavedCatalogCard = getSavedModalCatalogCard(card);
     modalSelectedCatalogCard = modalSavedCatalogCard;
+    document.getElementById("modal-catalog-locale").value = modalSavedCatalogCard?.locale || "en";
+    document.getElementById("modal-catalog-name-search").value = card.Name || "";
     document.getElementById("modal-save-set").disabled = true;
     document.getElementById("modal-set-picker").classList.add("hidden");
     document.getElementById("modal-open-set-picker").setAttribute("aria-expanded", "false");
@@ -1588,6 +1808,10 @@ function toggleModalEditDetails() {
     if (opening) {
         const card = modalActiveCard;
         document.getElementById("modal-edit-name").value = card.Name || "";
+        document.getElementById("modal-edit-species").value = card["Species Name"] || "";
+        document.getElementById("modal-edit-pokemon-form").value = card.Form || "";
+        document.getElementById("modal-edit-language").value = card["Card Language"] || "";
+        document.getElementById("modal-edit-variant").value = card["Catalog Variant"] || "";
         document.getElementById("modal-edit-dex").value = card["Dex Number"] || "";
         document.getElementById("modal-edit-page").value = card.Page || 1;
         document.getElementById("modal-edit-slot").value = card.Slot || 1;
@@ -1622,6 +1846,10 @@ async function saveModalCopyDetails() {
             body: JSON.stringify({
                 copy_id: card["Copy ID"] || "", page: document.getElementById("modal-edit-page").value,
                 slot: document.getElementById("modal-edit-slot").value, name: document.getElementById("modal-edit-name").value,
+                species_name: document.getElementById("modal-edit-species").value,
+                form: document.getElementById("modal-edit-pokemon-form").value,
+                card_language: document.getElementById("modal-edit-language").value,
+                catalog_variant: document.getElementById("modal-edit-variant").value,
                 dex_id: document.getElementById("modal-edit-dex").value || 0,
                 date_added: document.getElementById("modal-edit-date").value.replace("T", " "),
                 condition: document.getElementById("modal-edit-condition").value,
@@ -1650,12 +1878,14 @@ async function saveModalCatalogCard() {
     const status = document.getElementById("modal-set-status");
     const payload = {
         copy_id: card["Copy ID"] || "",
-        page: card.Page, slot: card.Slot, name: card.Name, date_added: card["Date Added"],
-        catalog_card_id: selected.id, set_id: selected.setId, set_name: selected.setName,
-        card_number: selected.number, catalog_rarity: selected.rarity, image_url: selected.imageUrl,
-        image_source: selected.imageSource || "", image_match_id: selected.imageMatchId || ""
+        page: card.Page, slot: card.Slot, name: selected?.name || card.Name, date_added: card["Date Added"],
+        catalog_provider: selected?.provider || "", catalog_locale: selected?.locale || "",
+        catalog_variant: selected?.variant || "", catalog_card_id: selected?.id || "",
+        set_id: selected?.setId || "", set_name: selected?.setName || "", card_number: selected?.number || "",
+        catalog_rarity: selected?.rarity || "", image_url: selected?.imageUrl || "",
+        image_source: selected?.imageSource || "", image_match_id: selected?.imageMatchId || ""
     };
-    status.textContent = "A guardar a nova edição…";
+    status.textContent = selected ? "A guardar a nova edição…" : "A remover a edição guardada…";
     document.getElementById("modal-save-set").disabled = true;
     try {
         const response = await accountFetch("/api/update-card", {
@@ -1663,7 +1893,7 @@ async function saveModalCatalogCard() {
         });
         const data = await response.json();
         if (!data.success) throw new Error(data.error || "Could not save printing");
-        showToast("Edição TCGdex guardada.", "success");
+        showToast(selected ? "Edição TCGdex guardada." : "Edição removida.", "success");
         await loadCollection();
         const refreshed = collection.find(item => card["Copy ID"] && item["Copy ID"] === card["Copy ID"]) ||
             collection.find(item => item.Page === card.Page && item.Slot === card.Slot && item["Date Added"] === card["Date Added"]);
@@ -1676,12 +1906,14 @@ async function saveModalCatalogCard() {
 }
 
 function filterCollectionCards(cards, { searchVal = "", condVal = "", typeFilterVal = "", sortBy = "dex", showRepeated = false }) {
-    searchVal = searchVal.trim().toLowerCase();
+    const normalize = value => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase()
+        .replace(/[^\p{L}\p{N}♀♂]+/gu, " ").trim();
+    const query = normalize(searchVal);
     let filtered = cards.filter(card => {
-        const matchesSearch = !searchVal || card.Name.toLowerCase().includes(searchVal) ||
-            card["Dex Number"].toString() === searchVal ||
-            (card.Notes && card.Notes.toLowerCase().includes(searchVal)) ||
-            `page ${card.Page}`.includes(searchVal);
+        const text = [card.Name, card["Species Name"], card.Form, card["Card Language"], card["Catalog Provider"],
+            card["Catalog Locale"], card["Catalog Card ID"], card["Set ID"], card["Set Name"], card["Card Number"],
+            card["Catalog Variant"], card.Notes, `page ${card.Page}`].map(normalize).join(" ");
+        const matchesSearch = !query || text.includes(query) || String(card["Dex Number"]).trim() === String(searchVal).trim();
         return matchesSearch && (!condVal || card.Condition === condVal) &&
             (!typeFilterVal || (card.Type || "Normal") === typeFilterVal);
     });
@@ -1719,7 +1951,10 @@ function filterCollectionCards(cards, { searchVal = "", condVal = "", typeFilter
     if (!showRepeated) {
         const seen = new Set();
         filtered = filtered.filter(card => {
-            const key = card["Dex Number"] > 0 ? String(card["Dex Number"]) : `custom:${card.Name.toLowerCase()}`;
+            const key = JSON.stringify([
+                card["Species Name"] || card.Name, card.Form, card["Card Language"], card["Catalog Provider"],
+                card["Catalog Locale"], card["Catalog Card ID"], card["Set ID"], card["Card Number"], card["Catalog Variant"]
+            ].map(value => String(value || "").trim().toLocaleLowerCase()));
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
@@ -1889,7 +2124,10 @@ function handleAutocomplete(query) {
         selectedCatalogCard = null;
         document.getElementById("add-clear-set").disabled = true;
         catalogSearchRevision++;
+        catalogSelectionRevision++;
+        clearTimeout(catalogSearchTimer);
         document.getElementById("add-set-options").replaceChildren();
+        clearAddCatalogCard();
         document.getElementById("add-set-status").textContent = "Select a Pokémon to search its printings.";
     }
     const box = document.getElementById("autocomplete-suggestions");
@@ -1983,47 +2221,72 @@ function highlightSuggestion(items) {
 }
 
 async function selectPokemon(match) {
-    selectedPokemon = match;
+    clearTimeout(catalogSearchTimer);
+    const regional = splitRegionalPokemonName(match.name);
+    const baseMatch = regional && findPokemonByName(regional.name);
+    const baseName = regional?.name || match.name;
+    selectedPokemon = {
+        ...match,
+        name: baseMatch?.name || baseName,
+        id: Number(baseMatch?.id || match.id) || 0
+    };
     selectedCatalogCard = null;
     catalogSelectionRevision++;
     document.getElementById("add-clear-set").disabled = true;
-    searchCatalogCards(match.name, "add-set-options", ++catalogSearchRevision);
-    document.getElementById("add-search-input").value = capitalize(match.name);
+    clearAddCatalogCard();
+    document.getElementById("add-search-input").value = capitalize(selectedPokemon.name);
+    document.getElementById("add-form").value = regional?.form || "Normal";
+    const printedName = addCatalogQuery();
+    searchCatalogCards(printedName, "add-set-options", ++catalogSearchRevision);
     document.getElementById("autocomplete-suggestions").classList.add("hidden");
     
     // Update card front preview
-    document.getElementById("preview-name").textContent = capitalize(match.name);
-    document.getElementById("preview-dex-id").textContent = `#${match.id}`;
+    document.getElementById("preview-name").textContent = printedName;
+    document.getElementById("preview-dex-id").textContent = selectedPokemon.id ? `#${selectedPokemon.id}` : "Custom";
     
     const previewImg = document.getElementById("preview-image");
     const previewPlaceholder = document.getElementById("preview-image-placeholder");
     
-    previewImg.src = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${match.id}.png`;
-    setCardImageFallback(previewImg, { "Dex Number": match.id });
+    previewImg.src = selectedPokemon.id ? `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedPokemon.id}.png` : "";
+    setCardImageFallback(previewImg, { "Dex Number": selectedPokemon.id });
     previewImg.classList.remove("hidden");
     previewPlaceholder.classList.add("hidden");
     
     // Request suggested placement positions
-    await fetchSuggestedPosition(match.id, match.name);
+    await fetchSuggestedPosition(selectedPokemon.id, selectedPokemon.name);
 }
 
 function selectPokemonCustom(query) {
-    selectedPokemon = { name: query.trim().toLowerCase(), id: 0 };
+    clearTimeout(catalogSearchTimer);
+    const regional = splitRegionalPokemonName(query);
+    const baseName = regional?.name || query.trim();
+    const match = findPokemonByName(baseName);
+    selectedPokemon = { name: match?.name || baseName, id: Number(match?.id) || 0 };
     selectedCatalogCard = null;
     catalogSelectionRevision++;
     document.getElementById("add-clear-set").disabled = true;
-    searchCatalogCards(selectedPokemon.name, "add-set-options", ++catalogSearchRevision);
-    document.getElementById("add-search-input").value = capitalize(query);
+    clearAddCatalogCard();
+    document.getElementById("add-search-input").value = capitalize(selectedPokemon.name);
+    document.getElementById("add-form").value = regional?.form || "Normal";
+    const printedName = addCatalogQuery();
+    searchCatalogCards(printedName, "add-set-options", ++catalogSearchRevision);
     document.getElementById("autocomplete-suggestions").classList.add("hidden");
     
     // Preview updates
-    document.getElementById("preview-name").textContent = capitalize(query);
-    document.getElementById("preview-dex-id").textContent = "Custom";
+    document.getElementById("preview-name").textContent = printedName;
+    document.getElementById("preview-dex-id").textContent = selectedPokemon.id ? `#${selectedPokemon.id}` : "Custom";
+    const previewImg = document.getElementById("preview-image");
+    if (selectedPokemon.id) {
+        previewImg.src = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedPokemon.id}.png`;
+        setCardImageFallback(previewImg, { "Dex Number": selectedPokemon.id });
+        previewImg.classList.remove("hidden");
+        document.getElementById("preview-image-placeholder").classList.add("hidden");
+    } else {
+        previewImg.classList.add("hidden");
+        document.getElementById("preview-image-placeholder").classList.remove("hidden");
+    }
     
-    document.getElementById("preview-image").classList.add("hidden");
-    document.getElementById("preview-image-placeholder").classList.remove("hidden");
-    
-    fetchSuggestedPosition(0, query);
+    fetchSuggestedPosition(selectedPokemon.id, selectedPokemon.name);
 }
 
 async function fetchSuggestedPosition(id, name) {
@@ -2076,6 +2339,7 @@ document.getElementById("add-notes").addEventListener("input", (e) => {
 });
 
 function resetAddCardForm() {
+    clearTimeout(catalogSearchTimer);
     selectedPokemon = null;
     selectedCatalogCard = null;
     catalogSelectionRevision++;
@@ -2084,6 +2348,8 @@ function resetAddCardForm() {
     document.getElementById("add-set-options").replaceChildren();
     document.getElementById("add-set-status").textContent = "Select a Pokémon to search its printings.";
     document.getElementById("add-search-input").value = "";
+    document.getElementById("add-form").value = "Normal";
+    document.getElementById("add-card-language").value = "";
     document.getElementById("add-condition").value = "NM";
     document.getElementById("add-type").value = "Normal";
     document.getElementById("add-notes").value = "";
@@ -2126,6 +2392,8 @@ async function submitAddCard() {
     const typeVal = document.getElementById("add-type").value;
     const condVal = document.getElementById("add-condition").value;
     const notesVal = document.getElementById("add-notes").value.trim();
+    const printedName = document.getElementById("add-search-input").value.trim();
+    const form = document.getElementById("add-form").value;
     
     if (isNaN(pageVal) || isNaN(slotVal) || pageVal < 1 || slotVal < 1) {
         showToast("Invalid Page or Slot coordinates specified", "error");
@@ -2139,8 +2407,14 @@ async function submitAddCard() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                name: selectedPokemon.name,
+                name: selectedCatalogCard?.name || addCatalogQuery() || printedName || selectedPokemon.name,
                 dex_id: selectedPokemon.id,
+                species_name: capitalize(selectedPokemon.name),
+                form: form === "Normal" ? "" : form,
+                card_language: document.getElementById("add-card-language").value,
+                catalog_provider: selectedCatalogCard?.provider || "",
+                catalog_locale: selectedCatalogCard?.locale || "",
+                catalog_variant: selectedCatalogCard?.variant || "",
                 page: pageVal,
                 slot: slotVal,
                 type: typeVal,
@@ -2238,7 +2512,10 @@ function openCardModal(page, slot, targetIdentifier = null) {
     const modal = document.getElementById("card-modal");
     
     // Fill text properties
-    document.getElementById("modal-details-title").textContent = capitalize(activeCard.Name);
+    document.getElementById("modal-details-title").textContent = activeCard.Name;
+    document.getElementById("modal-pokemon-species").textContent = activeCard["Species Name"] || "—";
+    document.getElementById("modal-pokemon-form").textContent = activeCard.Form || "—";
+    document.getElementById("modal-pokemon-language").textContent = activeCard["Card Language"] || "Desconhecido";
     document.getElementById("modal-pokemon-location").textContent = `Página ${activeCard.Page} · Espaço ${activeCard.Slot}`;
     document.getElementById("modal-pokemon-date").textContent = activeCard["Date Added"] ? `Adicionada em ${activeCard["Date Added"]}` : "Data não disponível";
     const notes = document.getElementById("modal-pokemon-notes");
@@ -2295,6 +2572,27 @@ function openCardModal(page, slot, targetIdentifier = null) {
     }
     
     modal.classList.remove("hidden");
+}
+
+async function openMarketForCard() {
+    if (!modalActiveCard) return;
+    const card = { ...modalActiveCard };
+    closeCardModal();
+    switchTab("market");
+    document.getElementById("market-name").value = card.Name || card["Species Name"] || "";
+    document.getElementById("market-locale").value = POKEBINDER_TCGDEX_LOCALES.has(card["Catalog Locale"])
+        ? card["Catalog Locale"] : "en";
+    document.getElementById("market-set").value = card["Set ID"] || "";
+    document.getElementById("market-number").value = card["Card Number"] || "";
+    scheduleMarketSearch();
+    if (card["Catalog Provider"] !== "TCGdex" || !POKEBINDER_TCGDEX_LOCALES.has(card["Catalog Locale"]) || !card["Catalog Card ID"]) return;
+    clearTimeout(marketTimer);
+    await selectMarketCard({
+        id: card["Catalog Card ID"], provider: "TCGdex", locale: card["Catalog Locale"],
+        name: card.Name || card["Species Name"] || "", setId: card["Set ID"] || "",
+        setName: card["Set Name"] || card["Set ID"] || "", number: card["Card Number"] || "",
+        image: card["Image URL"] || ""
+    });
 }
 
 async function saveModalNotes() {

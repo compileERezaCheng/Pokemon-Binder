@@ -39,6 +39,12 @@ class ScanScreenTest {
         showConfirmation(isManual = true, back = null, onConfirm = { confirmed.incrementAndGet() })
 
         composeTestRule.onNodeWithText("ESTIMATE CONDITION (BETA)").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Physical card language").assertExists()
+        composeTestRule.onNodeWithText("Catalog language").assertExists()
+        composeTestRule.onNodeWithText("Species name").assertExists()
+        composeTestRule.onNodeWithText("Regional form").assertExists()
+        composeTestRule.onNodeWithText("Printed set name").assertExists()
+        composeTestRule.onNodeWithText("Printed card number").assertExists()
         composeTestRule.onNodeWithText("COMMIT TO BINDER").performClick()
         assertEquals(1, confirmed.get())
     }

@@ -65,22 +65,26 @@ class LatestRequest {
     isCurrent(revision) { return revision === this.revision; }
 }
 
+const TCGDEX_LOCALES = new Set(['en', 'fr', 'es', 'it', 'pt', 'pt-br', 'pt-pt', 'de', 'nl', 'pl', 'ru', 'ja', 'ko', 'zh-tw', 'id', 'th', 'zh-cn']);
+
 class MarketClient {
-    constructor(fetcher = (url, options) => globalThis.fetch(url, options), clock = Date.now) {
-        this.fetcher = fetcher; this.clock = clock;
+    constructor(fetcher = (url, options) => globalThis.fetch(url, options), clock = Date.now, locale = 'en') {
+        this.fetcher = fetcher; this.clock = clock; this.locale = locale;
         this.cache = new Map(); this.pending = new Map(); this.retryAt = 0;
     }
     // Cache the complete response, including every finish, currency and condition supplied.
-    async get(path, refresh = false) {
-        const old = this.cache.get(path);
+    async get(path, refresh = false, locale = this.locale) {
+        if (!TCGDEX_LOCALES.has(locale)) throw new Error('Unsupported catalog locale');
+        const key = locale + ':' + path;
+        const old = this.cache.get(key);
         if (!refresh && old && this.clock() - old.time < 3600000) return { data: old.data, consulted: old.consulted, stale: false };
-        if (this.pending.has(path)) return this.pending.get(path);
+        if (this.pending.has(key)) return this.pending.get(key);
         const request = (async () => {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 10000);
             try {
                 if (this.clock() < this.retryAt) throw new Error('API limit reached. Retry later.');
-                const response = await this.fetcher('https://api.tcgdex.net/v2/en/' + path, { signal: controller.signal });
+                const response = await this.fetcher('https://api.tcgdex.net/v2/' + locale + '/' + path, { signal: controller.signal });
                 if (response.status === 429) {
                     const seconds = Number(response.headers?.get('Retry-After'));
                     this.retryAt = this.clock() + (seconds > 0 ? seconds * 1000 : 60000);
@@ -90,15 +94,15 @@ class MarketClient {
                 const data = await response.json();
                 const consulted = new Date(this.clock()).toISOString();
                 if (this.cache.size >= 128) this.cache.delete(this.cache.keys().next().value);
-                this.cache.set(path, { data, time: this.clock(), consulted });
+                this.cache.set(key, { data, time: this.clock(), consulted });
                 return { data, consulted, stale: false };
             } catch (error) {
                 if (old) return { data: old.data, consulted: old.consulted, stale: true, error: error.message };
                 throw error;
             } finally { clearTimeout(timeout); }
         })();
-        this.pending.set(path, request);
-        try { return await request; } finally { this.pending.delete(path); }
+        this.pending.set(key, request);
+        try { return await request; } finally { this.pending.delete(key); }
     }
 }
 

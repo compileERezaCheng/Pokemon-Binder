@@ -7,6 +7,8 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.Normalizer
+import java.util.Locale
 
 object PokeApiClient {
     /** Cached list of all Pokémon names (fetched once, stored in-memory). */
@@ -17,40 +19,48 @@ object PokeApiClient {
         return ((dexNumber - 1) / 9 + 1) to ((dexNumber - 1) % 9 + 1)
     }
 
+    internal fun nationalDexFromPokemon(json: JSONObject): Int {
+        val speciesUrl = json.optJSONObject("species")?.optString("url").orEmpty()
+        return Regex("/pokemon-species/(\\d+)/?$").find(speciesUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    }
+
     fun normalizePokemonName(name: String): String {
-        var n = name.lowercase().trim()
-        // 1. Remove text inside parentheses (e.g. "Pikachu (Japanese version)" -> "Pikachu")
-        n = n.replace(Regex("\\([^)]*\\)"), "")
-        // 2. Remove language suffixes (e.g. "Pikachu Japanese", "Pikachu JP", "Pikachu Japanese version")
-        val langRegex = Regex("\\b(japanese|french|spanish|german|italian|korean|chinese|english|jp|en|es|fr|de|kr|cn)(\\s+version)?\\b")
-        n = n.replace(langRegex, "")
-        // 3. Clean up extra spaces
-        n = n.replace(Regex("\\s+"), " ").trim()
-        return n
+        val normalized = Normalizer.normalize(name.lowercase(Locale.ROOT), Normalizer.Form.NFKD)
+        return buildString {
+            for (character in normalized) {
+                when {
+                    Character.getType(character) == Character.NON_SPACING_MARK.toInt() -> Unit
+                    character.isLetterOrDigit() || character == '♀' || character == '♂' -> append(character)
+                    else -> append(' ')
+                }
+            }
+        }.replace(Regex("\\s+"), " ").trim()
     }
 
     suspend fun fetchDexNumber(name: String): Int = withContext(Dispatchers.IO) {
-        val normalized = normalizePokemonName(name)
-        if (normalized.isEmpty()) return@withContext 0
-        
-        // Try full normalized name
-        var dex = queryPokeApi(normalized)
-        if (dex > 0) return@withContext dex
-        
-        // Fallback: if it has multiple words (e.g. "charizard ex"), try the first word
-        val words = normalized.split(" ", "-")
-        if (words.size > 1) {
-            dex = queryPokeApi(words[0])
-            if (dex > 0) return@withContext dex
-        }
-        
-        0
+        val slug = pokemonLookupSlug(name)
+        if (slug.isEmpty()) return@withContext 0
+        queryPokeApi(slug)
     }
 
-    private fun queryPokeApi(name: String): Int {
+    internal fun pokemonLookupSlug(name: String): String {
+        val parts = normalizePokemonName(name).split(' ').filter(String::isNotBlank).toMutableList()
+        while (parts.lastOrNull() in setOf("ex", "gx", "v", "vmax", "vstar", "break")) parts.removeAt(parts.lastIndex)
+        if (parts.firstOrNull() in setOf("m", "mega")) parts.removeAt(0)
+        if (parts.lastOrNull() in setOf("x", "y") && parts.getOrNull(parts.lastIndex - 1) == "mega") parts.removeAt(parts.lastIndex)
+        if (parts.size == 1 && parts[0] == "nidoran♀") return "nidoran-f"
+        if (parts.size == 1 && parts[0] == "nidoran♂") return "nidoran-m"
+        if (parts.size == 2 && parts[0] == "farfetch" && parts[1] == "d") return "farfetchd"
+        val regionalForms = mapOf("alolan" to "alola", "galarian" to "galar", "hisuian" to "hisui", "paldean" to "paldea")
+        val region = regionalForms[parts.firstOrNull()]
+        if (region != null && parts.size > 1) return (parts.drop(1) + region).joinToString("-")
+        return parts.joinToString("-")
+    }
+
+    private fun queryPokeApi(slug: String): Int {
         try {
-            val cleanName = name.lowercase().trim().replace(" ", "-")
-            val url = URL("https://pokeapi.co/api/v2/pokemon/$cleanName")
+            val encodedSlug = java.net.URLEncoder.encode(slug, "UTF-8").replace("+", "%20")
+            val url = URL("https://pokeapi.co/api/v2/pokemon/$encodedSlug")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 3000
@@ -58,7 +68,7 @@ object PokeApiClient {
             if (conn.responseCode == 200) {
                 val res = BufferedReader(InputStreamReader(conn.inputStream)).readText()
                 val json = JSONObject(res)
-                return json.getInt("id")
+                return nationalDexFromPokemon(json)
             }
         } catch (e: Exception) {
             // Ignore
@@ -73,7 +83,7 @@ object PokeApiClient {
     suspend fun fetchAllNames(): List<String> = withContext(Dispatchers.IO) {
         cachedNames?.let { return@withContext it }
         try {
-            val url = URL("https://pokeapi.co/api/v2/pokemon?limit=1025&offset=0")
+            val url = URL("https://pokeapi.co/api/v2/pokemon?limit=20000&offset=0")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 6000
@@ -87,9 +97,12 @@ object PokeApiClient {
                     val n = results.getJSONObject(i).optString("name", "")
                     if (n.isNotEmpty()) {
                         // Convert api-name to display name: "mr-mime" -> "Mr Mime"
-                        names.add(n.split("-").joinToString(" ") { w ->
-                            w.replaceFirstChar { it.uppercase() }
-                        })
+                        val region = n.substringAfterLast('-')
+                        val regionName = mapOf("alola" to "Alolan", "galar" to "Galarian", "hisui" to "Hisuian", "paldea" to "Paldean")[region]
+                        val display = if (regionName != null && '-' in n) {
+                            "$regionName " + n.substringBeforeLast('-').split('-').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+                        } else n.split('-').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+                        names.add(display)
                     }
                 }
                 cachedNames = names
@@ -107,9 +120,9 @@ object PokeApiClient {
      * Returns up to [limit] results.
      */
     fun searchPokemon(query: String, allNames: List<String>, limit: Int = 6): List<String> {
-        if (query.length < 2) return emptyList()
-        val q = query.trim().lowercase()
-        return allNames.filter { it.lowercase().contains(q) }.take(limit)
+        val q = normalizePokemonName(query)
+        if (q.length < 2) return emptyList()
+        return allNames.filter { normalizePokemonName(it).contains(q) }.take(limit)
     }
 
     /**

@@ -158,6 +158,33 @@ class BackendDataTests(TemporaryBinderTest):
         self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("pecharunt", database))
         self.assertEqual((1025, "pecharunt"), pokemon_binder.find_pokemon("1025", database))
 
+    def test_legacy_catalog_id_migrates_locale_without_guessing_physical_language(self):
+        path = Path(pokemon_binder.DATA_FILE)
+        legacy_csv = (
+            "Page,Slot,Dex Number,Name,Type,Condition,Notes,Date Added,Copy ID,Catalog Card ID,Set ID,Set Name,Card Number\n"
+            "1,2,6,Charizard,Rare,NM,keep me,2024-01-01 12:00:00,copy-legacy,base1-4,base1,Base,4\n"
+            "1,3,25,Pikachu,Normal,NM,manual,2024-01-01 12:00:00,copy-manual,,,,\n"
+        )
+        path.write_text(legacy_csv, encoding="utf-8")
+        backup = Path(str(path) + ".pre-migration.bak")
+
+        migrated = pokemon_binder.load_collection()
+
+        self.assertEqual("TCGdex", migrated[0].get("Catalog Provider"))
+        self.assertEqual("en", migrated[0].get("Catalog Locale"))
+        self.assertEqual("", migrated[0].get("Card Language", ""))
+        self.assertEqual("copy-legacy", migrated[0]["Copy ID"])
+        self.assertEqual("keep me", migrated[0]["Notes"])
+        self.assertEqual("", migrated[1].get("Catalog Provider") or "")
+        self.assertEqual("", migrated[1].get("Catalog Locale") or "")
+        self.assertEqual("", migrated[1].get("Card Language") or "")
+        self.assertEqual(legacy_csv, backup.read_text(encoding="utf-8"))
+
+        backup_before = backup.read_bytes()
+        migrated_again = pokemon_binder.load_collection()
+        self.assertEqual("copy-legacy", migrated_again[0]["Copy ID"])
+        self.assertEqual(backup_before, backup.read_bytes())
+
     def test_card_image_url_survives_csv_reload(self):
         image_url = "https://assets.tcgdex.net/en/base/base1/4"
         self.assertTrue(pokemon_binder.add_card_to_csv({**card("charizard", dex=6), "Image URL": image_url}))
@@ -349,7 +376,7 @@ class BinderApiTests(TemporaryBinderTest):
         details = json.dumps({"assessable": True, "criteria": {"centering": {"score": 8, "evidence": "even"}}})
         _, added = self.request_json("/api/add", {
             "name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7, "type": "Rare Holo",
-            "condition": "LP", "notes": "keep my note", "catalog_card_id": "base1-25",
+            "condition": "LP", "notes": "keep my note", "catalog_provider": "TCGdex", "catalog_locale": "en", "catalog_card_id": "base1-25",
             "set_id": "base1", "set_name": "Base", "card_number": "25",
             "catalog_rarity": "Rare Holo", "image_url": "https://assets.tcgdex.net/en/base/base1/25/low.webp",
             "grade": 8.5, "grade_details": details,
@@ -377,7 +404,7 @@ class BinderApiTests(TemporaryBinderTest):
     def test_notes_update_preserves_the_saved_catalog_printing(self):
         _, added = self.request_json("/api/add", {
             "name": "Pikachu", "dex_id": 25, "page": 3, "slot": 7, "type": "Rare Holo",
-            "condition": "LP", "notes": "old note", "catalog_card_id": "base1-25",
+            "condition": "LP", "notes": "old note", "catalog_provider": "TCGdex", "catalog_locale": "en", "catalog_card_id": "base1-25",
             "set_id": "base1", "set_name": "Base", "card_number": "25",
             "catalog_rarity": "Rare Holo", "image_url": "https://assets.tcgdex.net/en/base/base1/25/low.webp",
         })
@@ -400,14 +427,14 @@ class BinderApiTests(TemporaryBinderTest):
         before = added["card"]
 
         status, updated = self.request_json("/api/update-card", {
-            "copy_id": before["Copy ID"], "name": "Raichu", "page": 4, "slot": 2,
+            "copy_id": before["Copy ID"], "name": "Pikachu", "page": 4, "slot": 2,
             "condition": "NM", "type": "Ultra Rare", "grade": 9.5,
             "date_added": "2026-10-16 12:30:00",
         })
 
         self.assertEqual(200, status, updated)
         saved = pokemon_binder.load_collection()[0]
-        self.assertEqual(("Raichu", 4, 2, "NM", "Ultra Rare", "9.5"), (
+        self.assertEqual(("Pikachu", 4, 2, "NM", "Ultra Rare", "9.5"), (
             saved["Name"], saved["Page"], saved["Slot"], saved["Condition"], saved["Type"], saved["Grade"]
         ))
         self.assertEqual(before["Copy ID"], saved["Copy ID"])
@@ -556,6 +583,37 @@ class FirebaseSyncTests(TemporaryBinderTest):
         self.assertTrue(ok)
         merged = pokemon_binder.load_collection("test-user")
         self.assertEqual({"base1-25", "neo3-12"}, {c.get("Catalog Card ID") for c in merged})
+
+    def test_first_sync_round_trips_localized_printing_fields(self):
+        local = {
+            **card("ヒスイゾロア", dex=570),
+            "Copy ID": "copy-ja-1",
+            "Species Name": "Zorua",
+            "Form": "Hisuian",
+            "Card Language": "ja",
+            "Catalog Provider": "TCGdex",
+            "Catalog Locale": "ja",
+            "Catalog Card ID": "sv10-1",
+            "Set ID": "sv10",
+            "Set Name": "Black Bolt",
+            "Card Number": "1",
+            "Catalog Variant": "normal",
+            "Catalog Rarity": "Common",
+            "Image URL": "https://assets.tcgdex.net/ja/sv/sv10/1/low.webp",
+            "Image Source": "TCGdex",
+            "Image Match ID": "",
+        }
+        ok, message = self.sync([local])
+
+        self.assertTrue(ok, message)
+        returned = pokemon_binder.load_collection("test-user")[0]
+        for field in (
+            "Name", "Species Name", "Form", "Card Language", "Catalog Provider", "Catalog Locale",
+            "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant",
+            "Catalog Rarity", "Image URL", "Image Source",
+        ):
+            self.assertEqual(local[field], returned[field], field)
+            self.assertEqual(local[field], self.remote[0][field], field)
 
     def test_first_link_unions_both_sides_and_preserves_duplicate_stacks(self):
         pikachu = card("pikachu", dex=25)

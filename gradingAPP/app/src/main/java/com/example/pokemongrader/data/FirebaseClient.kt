@@ -255,8 +255,8 @@ object FirebaseClient {
     private fun conflict(copyId: String, base: Card?, local: Card?, remote: Card?, message: String) =
         CardSyncConflictException(copyId, base, local, remote, message)
 
-    private val printingFields = setOf("Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID")
-    private val syncFields = listOf("Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Notes", "Date Added", "Image URL", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID")
+    private val printingFields = setOf("Name", "Species Name", "Dex Number", "Form", "Card Language", "Catalog Provider", "Catalog Locale", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID")
+    private val syncFields = listOf("Page", "Slot", "Dex Number", "Name", "Species Name", "Form", "Card Language", "Type", "Condition", "Notes", "Date Added", "Image URL", "Catalog Provider", "Catalog Locale", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant", "Catalog Rarity", "Grade", "Grade Details", "Image Source", "Image Match ID")
 
     private fun changedFields(base: Card, changed: Card): List<String> {
         val before = base.toJsonObject()
@@ -292,7 +292,7 @@ object FirebaseClient {
     }
 
     private fun sameAdd(existing: Card, requested: Card): Boolean =
-        listOf("Page", "Slot", "Dex Number", "Name", "Type", "Condition", "Catalog Card ID", "Set ID", "Card Number")
+        listOf("Page", "Slot", "Dex Number", "Name", "Species Name", "Form", "Card Language", "Catalog Provider", "Catalog Locale", "Type", "Condition", "Catalog Card ID", "Set ID", "Card Number", "Catalog Variant")
             .all { sameValue(existing.toJsonObject(), requested.toJsonObject(), it) }
 
     private fun sameValue(left: JSONObject, right: JSONObject, field: String): Boolean =

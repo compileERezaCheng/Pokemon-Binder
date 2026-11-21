@@ -17,23 +17,27 @@ import java.util.TimeZone
 data class MarketPrice(val amount: Double, val currency: String, val type: String, val variant: String,
     val source: String, val updated: String, val dateLabel: String)
 
-data class MarketResponse(val json: String, val consulted: String, val stale: Boolean = false, val error: String? = null)
+data class MarketResponse(val json: String, val consulted: String, val stale: Boolean = false, val error: String? = null, val locale: String = "en")
 
 /** In-memory one-hour cache of complete English responses (all currencies, finishes and conditions). */
 class MarketClient(
     private val fetch: suspend (String) -> String = { MarketPrices.request(it) },
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val defaultLocale: String = "en"
 ) {
     private val mutex = Mutex()
     private val cache = linkedMapOf<String, Pair<Long, MarketResponse>>()
 
-    suspend fun get(path: String): MarketResponse = mutex.withLock {
-        val old = cache[path]
+    suspend fun get(path: String, locale: String = defaultLocale): MarketResponse = mutex.withLock {
+        val safeLocale = TcgDexLocale.requireSupported(locale)
+        val key = "$safeLocale/$path"
+        val old = cache[key]
         if (old != null && clock() - old.first < 3600000L) return@withLock old.second
         try {
-            val response = MarketResponse(fetch(path), MarketPrices.timestamp(clock()))
+            val requestPath = if (safeLocale == "en") path else "$safeLocale/$path"
+            val response = MarketResponse(fetch(requestPath), MarketPrices.timestamp(clock()), locale = safeLocale)
             if (cache.size >= 128) cache.remove(cache.keys.first())
-            cache[path] = clock() to response
+            cache[key] = clock() to response
             response
         } catch (e: CancellationException) {
             throw e
@@ -52,7 +56,10 @@ object MarketPrices {
 
     internal suspend fun request(path: String): String = withContext(Dispatchers.IO) {
         if (System.currentTimeMillis() < retryAt) throw IOException("API limit reached. Retry later.")
-        val conn = URL("https://api.tcgdex.net/v2/en/$path").openConnection() as HttpURLConnection
+        val requestedLocale = path.substringBefore('/').takeIf(TcgDexLocale::isSupported)
+        val locale = TcgDexLocale.requireSupported(requestedLocale ?: "en")
+        val apiPath = if (requestedLocale == null) path else path.substringAfter('/')
+        val conn = URL("https://api.tcgdex.net/v2/$locale/$apiPath").openConnection() as HttpURLConnection
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
         try {

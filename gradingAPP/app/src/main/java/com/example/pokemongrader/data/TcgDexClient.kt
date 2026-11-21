@@ -23,16 +23,19 @@ data class CatalogCard(
     val rarity: String,
     val imageUrl: String,
     val imageSource: String = "",
-    val imageMatchId: String = ""
+    val imageMatchId: String = "",
+    val locale: String = "en",
+    val provider: String = "TCGdex",
+    val speciesDex: Int = 0
 )
 
 data class ScrydexImageMatch(val cardId: String, val imageUrl: String)
 
 object TcgDexClient {
-    private const val API = "https://api.tcgdex.net/v2/en/"
+    private const val API = "https://api.tcgdex.net/v2/"
     private const val SCRYDEX_API = "https://api.scrydex.com/pokemon/v1/en/cards"
     private val CARD_IMAGE = Regex("""https://assets\.tcgdex\.net/[a-z-]+/[^/?#]+/[^/?#]+/([^/?#.]+)(?:/(?:low|high)\.(?:webp|png|jpg))?""")
-    @Volatile private var cachedSets: Map<String, String> = emptyMap()
+    private val cachedSets = ConcurrentHashMap<String, Map<String, String>>()
     private data class CachedMatch(val value: ScrydexImageMatch?)
     private val alternateImageCache = ConcurrentHashMap<String, CachedMatch>()
 
@@ -42,7 +45,7 @@ object TcgDexClient {
         return cards.optJSONObject(0)?.optString("image")?.let(::cardImageUrl)
     }
 
-    internal fun parseBriefCards(json: String, setNames: Map<String, String> = emptyMap()): List<CatalogCard> {
+    internal fun parseBriefCards(json: String, setNames: Map<String, String> = emptyMap(), locale: String = "en"): List<CatalogCard> {
         val cards = JSONArray(json)
         return buildList {
             for (i in 0 until cards.length()) {
@@ -61,14 +64,15 @@ object TcgDexClient {
                         number = number,
                         rarity = "",
                         imageUrl = cardImageUrl(item.optString("image")).orEmpty(),
-                        imageSource = if (cardImageUrl(item.optString("image")).isNullOrBlank()) "" else "TCGdex"
+                        imageSource = if (cardImageUrl(item.optString("image")).isNullOrBlank()) "" else "TCGdex",
+                        locale = TcgDexLocale.requireSupported(locale)
                     )
                 )
             }
         }
     }
 
-    internal fun parseCardDetails(json: String): CatalogCard? {
+    internal fun parseCardDetails(json: String, locale: String = "en"): CatalogCard? {
         val card = JSONObject(json)
         val set = card.optJSONObject("set") ?: return null
         val id = card.optString("id")
@@ -85,7 +89,9 @@ object TcgDexClient {
             number = number,
             rarity = card.optString("rarity"),
             imageUrl = cardImageUrl(card.optString("image")).orEmpty(),
-            imageSource = if (cardImageUrl(card.optString("image")).isNullOrBlank()) "" else "TCGdex"
+            imageSource = if (cardImageUrl(card.optString("image")).isNullOrBlank()) "" else "TCGdex",
+            locale = TcgDexLocale.requireSupported(locale),
+            speciesDex = card.optJSONArray("dexId")?.optInt(0) ?: 0
         )
     }
 
@@ -97,7 +103,7 @@ object TcgDexClient {
     ): CatalogCard? {
         val number = cardNumber.substringBefore('/').trim()
         return cards.filter {
-            it.name.equals(name.trim(), ignoreCase = true) &&
+            normalize(it.name) == normalize(name) &&
                 (setName.isBlank() || it.setName.equals(setName.trim(), ignoreCase = true)) &&
                 (number.isBlank() || it.number.equals(number, ignoreCase = true))
         }.singleOrNull()
@@ -111,45 +117,48 @@ object TcgDexClient {
         return if (term.isBlank()) cards else cards.filter { normalize(it.setName).contains(term) }
     }
 
-    suspend fun searchCards(name: String, setName: String = "", cardNumber: String = ""): List<CatalogCard> =
+    suspend fun searchCards(name: String, setName: String = "", cardNumber: String = "", locale: String = "en"): List<CatalogCard> =
         withContext(Dispatchers.IO) {
             if (name.isBlank()) return@withContext emptyList()
+            TcgDexLocale.requireSupported(locale)
             val number = cardNumber.substringBefore('/').trim()
             val filters = buildList {
                 add("name=" + encode(name))
                 if (setName.isNotBlank()) add("set.name=" + encode(setName))
                 if (number.isNotBlank()) add("localId=" + encode("eq:$number"))
             }
-            var result = request("cards?" + filters.joinToString("&"))
+            var result = request("cards?" + filters.joinToString("&"), locale)
             if (JSONArray(result).length() == 0 && (setName.isNotBlank() || number.isNotBlank())) {
-                result = request("cards?name=" + encode(name))
+                result = request("cards?name=" + encode(name), locale)
             }
-            val setNames = runCatching { fetchSetNames() }.getOrDefault(emptyMap())
-            val candidates = parseBriefCards(result, setNames)
+            val setNames = runCatching { fetchSetNames(locale) }.getOrDefault(emptyMap())
+            val candidates = parseBriefCards(result, setNames, locale)
             val exact = candidates.filter { isPokemonCardNameMatch(it.name, name) }
             sortBySetName(exact.ifEmpty { candidates })
         }
 
-    suspend fun fetchCard(id: String): CatalogCard? = withContext(Dispatchers.IO) {
-        parseCardDetails(request("cards/" + encode(id)))
+    suspend fun fetchCard(id: String, locale: String = "en"): CatalogCard? = withContext(Dispatchers.IO) {
+        parseCardDetails(request("cards/" + encode(id), locale), locale)
     }
 
-    suspend fun findImage(name: String, setName: String, cardNumber: String): String? {
-        val candidates = searchCards(name, setName, cardNumber)
+    suspend fun findImage(name: String, setName: String, cardNumber: String, locale: String = "en"): String? {
+        val candidates = searchCards(name, setName, cardNumber, locale)
         val selected = uniqueCard(candidates, name, setName, cardNumber) ?: return null
-        return runCatching { fetchCard(selected.id) }.getOrNull()?.imageUrl?.takeIf { it.isNotBlank() }
+        return runCatching { fetchCard(selected.id, locale) }.getOrNull()?.imageUrl?.takeIf { it.isNotBlank() }
             ?: selected.imageUrl.takeIf { it.isNotBlank() }
     }
 
     internal fun isPokemonCardNameMatch(cardName: String, pokemonName: String): Boolean {
-        val target = normalize(cardName = pokemonName).split(" ").filter(String::isNotBlank)
-        val tokens = normalize(cardName).split(" ").filter(String::isNotBlank).toMutableList()
-        if (target.isEmpty() || tokens.isEmpty()) return false
-        val mega = tokens.first() in setOf("m", "mega")
-        if (mega) tokens.removeAt(0)
-        if (tokens.lastOrNull() in setOf("ex", "gx", "v", "vmax", "vstar", "break")) tokens.removeAt(tokens.lastIndex)
-        if (mega && tokens.lastOrNull() in setOf("x", "y")) tokens.removeAt(tokens.lastIndex)
-        return tokens == target
+        fun identity(value: String): String {
+            val tokens = normalize(value).split(" ").filter(String::isNotBlank).toMutableList()
+            val mega = tokens.firstOrNull() in setOf("m", "mega")
+            if (mega) tokens.removeAt(0)
+            if (tokens.lastOrNull() in setOf("ex", "gx", "v", "vmax", "vstar", "break")) tokens.removeAt(tokens.lastIndex)
+            if (mega && tokens.lastOrNull() in setOf("x", "y")) tokens.removeAt(tokens.lastIndex)
+            return tokens.joinToString(" ")
+        }
+        val target = identity(pokemonName)
+        return target.isNotEmpty() && identity(cardName) == target
     }
 
     internal fun matchScrydexImage(tcgdexJson: String, scrydexJson: String): ScrydexImageMatch? {
@@ -191,14 +200,16 @@ object TcgDexClient {
     }
 
     suspend fun resolveAlternateImage(card: CatalogCard): ScrydexImageMatch? = withContext(Dispatchers.IO) {
-        alternateImageCache[card.id]?.let { return@withContext it.value }
+        if (card.provider != "TCGdex" || card.locale != "en") return@withContext null
+        val cacheKey = "${card.provider}:${card.locale}:${card.id}"
+        alternateImageCache[cacheKey]?.let { return@withContext it.value }
         try {
-            val tcgdex = request("cards/" + encode(card.id))
+            val tcgdex = request("cards/" + encode(card.id), card.locale)
             val details = JSONObject(tcgdex)
             val setName = details.optJSONObject("set")?.optString("name").orEmpty()
             val number = numberKey(details.optString("localId"))
             if (setName.isBlank() || number.isBlank()) {
-                alternateImageCache[card.id] = CachedMatch(null)
+                alternateImageCache[cacheKey] = CachedMatch(null)
                 return@withContext null
             }
             val escapedSet = setName.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -206,7 +217,7 @@ object TcgDexClient {
             val fields = "id,name,number,printed_number,language_code,subtypes,expansion,images"
             val response = requestAbsolute("$SCRYDEX_API?q=${encode(query)}&page_size=100&select=${encode(fields)}")
             val match = matchScrydexImage(tcgdex, response)
-            alternateImageCache[card.id] = CachedMatch(match)
+            alternateImageCache[cacheKey] = CachedMatch(match)
             match
         } catch (e: CancellationException) {
             throw e
@@ -215,9 +226,9 @@ object TcgDexClient {
         }
     }
 
-    private fun fetchSetNames(): Map<String, String> {
-        cachedSets.takeIf { it.isNotEmpty() }?.let { return it }
-        val sets = JSONArray(request("sets"))
+    private fun fetchSetNames(locale: String): Map<String, String> {
+        cachedSets[locale]?.let { return it }
+        val sets = JSONArray(request("sets", locale))
         val names = buildMap {
             for (i in 0 until sets.length()) {
                 val set = sets.optJSONObject(i) ?: continue
@@ -226,11 +237,12 @@ object TcgDexClient {
                 if (id.isNotBlank() && name.isNotBlank()) put(id, name)
             }
         }
-        if (names.isNotEmpty()) cachedSets = names
+        if (names.isNotEmpty()) cachedSets[locale] = names
         return names
     }
 
-    private fun request(path: String): String = requestAbsolute(API + path)
+    private fun request(path: String, locale: String = "en"): String =
+        requestAbsolute(API + TcgDexLocale.requireSupported(locale) + "/" + path)
 
     private fun requestAbsolute(url: String): String {
         val connection = URL(url).openConnection() as HttpURLConnection
@@ -254,8 +266,8 @@ object TcgDexClient {
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-    private fun normalize(cardName: String): String = Normalizer.normalize(cardName, Normalizer.Form.NFKD)
-        .replace(Regex("\\p{M}+"), "").lowercase().replace(Regex("[^a-z0-9]+"), " ").trim().replace(Regex("\\s+"), " ")
+    private fun normalize(cardName: String): String = Normalizer.normalize(cardName, Normalizer.Form.NFKC)
+        .lowercase(java.util.Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}♀♂]+"), " ").trim().replace(Regex("\\s+"), " ")
 
     private fun numberKey(value: String): String = value.substringBefore('/').trim().uppercase().let {
         it.toIntOrNull()?.toString() ?: it

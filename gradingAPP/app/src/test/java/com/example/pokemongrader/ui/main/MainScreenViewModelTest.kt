@@ -2,6 +2,7 @@ package com.example.pokemongrader.ui.main
 
 import com.example.pokemongrader.data.Card
 import com.example.pokemongrader.data.PokeApiClient
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -85,10 +86,16 @@ class MainScreenViewModelTest {
 
     @Test
     fun foreignLanguageCardNamesNormalizeForDexLookup() {
-        assertEquals("pikachu", PokeApiClient.normalizePokemonName("Pikachu (Japanese version)"))
-        assertEquals("charizard", PokeApiClient.normalizePokemonName("Charizard JP"))
+        assertEquals("pikachu japanese version", PokeApiClient.normalizePokemonName("Pikachu (Japanese version)"))
+        assertEquals("charizard jp", PokeApiClient.normalizePokemonName("Charizard JP"))
+        assertEquals("mr mime", PokeApiClient.normalizePokemonName("Mr. Mime"))
+        assertEquals("nidoran♀", PokeApiClient.normalizePokemonName("Nidoran♀"))
+        assertEquals("zorua-hisui", PokeApiClient.pokemonLookupSlug("Hisuian Zorua V"))
+        assertEquals("nidoran-f", PokeApiClient.pokemonLookupSlug("Nidoran♀"))
+        assertEquals("mr-mime", PokeApiClient.pokemonLookupSlug("Mr. Mime"))
         assertEquals(listOf("Pikachu", "Pikachu Libre"), PokeApiClient.searchPokemon("pika", listOf("Pikachu", "Pikachu Libre", "Charizard"), 2))
         assertTrue(PokeApiClient.searchPokemon("p", listOf("Pikachu")).isEmpty())
+        assertEquals(listOf("リザードン"), PokeApiClient.searchPokemon("リザ", listOf("リザードン")))
     }
 
     @Test
@@ -97,6 +104,13 @@ class MainScreenViewModelTest {
         assertEquals(1 to 9, PokeApiClient.binderPosition(9))
         assertEquals(2 to 1, PokeApiClient.binderPosition(10))
         assertEquals(3 to 7, PokeApiClient.binderPosition(25))
+    }
+
+    @Test
+    fun regionalPokemonUsesItsSpeciesNationalDexNumber() {
+        val pokemon = JSONObject("""{"id":10249,"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/570/"}}""")
+
+        assertEquals(570, PokeApiClient.nationalDexFromPokemon(pokemon))
     }
 
     @Test

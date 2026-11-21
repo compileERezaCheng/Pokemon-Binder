@@ -44,6 +44,7 @@ _SINGLE_INSTANCE_HANDLE = None
 INSTANCE_TOKEN = os.environ.get('POKEMON_BINDER_INSTANCE', '')
 SCRYDEX_API = "https://api.scrydex.com/pokemon/v1/en/cards"
 _scrydex_image_cache = {}
+TCGDEX_LOCALES = frozenset({"en", "fr", "es", "it", "pt", "pt-br", "pt-pt", "de", "nl", "pl", "ru", "ja", "ko", "zh-tw", "id", "th", "zh-cn"})
 PUBLIC_SETTINGS = {
     'rows', 'cols', 'mode', 'gsheet_enabled', 'gsheet_name', 'firebase_enabled',
     'firebase_email', 'firebase_user_id', 'username', 'cover_title', 'cover_subtitle', 'cover_owner',
@@ -75,18 +76,56 @@ def valid_catalog_image_url(value):
         return False
 
 
-def valid_catalog_image_metadata(url, source="", match_id=""):
+def valid_catalog_image_metadata(url, source="", match_id="", locale=""):
     url = str(url or "").strip()
     if not valid_catalog_image_url(url):
         return "", "", ""
     parsed = urllib.parse.urlsplit(url)
     if parsed.hostname == "assets.tcgdex.net":
+        image_locale = parsed.path.split("/")[1]
+        if source not in ("", "TCGdex") or (locale and image_locale != locale):
+            return "", "", ""
         return url, "TCGdex", ""
     parts = parsed.path.split("/")
     card_id = urllib.parse.unquote(parts[2]) if len(parts) == 4 else ""
-    if source not in ("", "Scrydex") or not card_id or match_id not in ("", card_id):
+    if locale not in ("", "en") or source not in ("", "Scrydex") or not card_id or match_id not in ("", card_id):
         return "", "", ""
     return url, "Scrydex", card_id
+
+
+def card_identity_fields(data):
+    fields = {
+        "Species Name": ("species_name", 80),
+        "Form": ("form", 80),
+        "Card Language": ("card_language", 40),
+        "Catalog Provider": ("catalog_provider", 40),
+        "Catalog Locale": ("catalog_locale", 12),
+        "Catalog Variant": ("catalog_variant", 80),
+    }
+    values = {column: str(data.get(key) or "").strip() for column, (key, _) in fields.items()}
+    if any(len(values[column]) > limit for column, (_, limit) in fields.items()):
+        raise ValueError("Card identity field is too long")
+    if values["Catalog Locale"] and values["Catalog Locale"] not in TCGDEX_LOCALES:
+        raise ValueError("Unsupported catalog locale")
+    if values["Catalog Provider"] and values["Catalog Provider"] != "TCGdex":
+        raise ValueError("Unsupported catalog provider")
+    return values
+
+
+def validate_catalog_printing(data, identity_fields):
+    card_id = str(data.get("catalog_card_id") or "").strip()
+    set_fields = ("set_id", "image_url", "image_source", "image_match_id")
+    has_set_data = any(str(data.get(field) or "").strip() for field in set_fields)
+    provider = identity_fields["Catalog Provider"]
+    locale = identity_fields["Catalog Locale"]
+    if len(card_id) > 128 or (card_id and not re.fullmatch(r"[A-Za-z0-9._-]+", card_id)):
+        raise ValueError("Invalid catalog card ID")
+    if bool(provider) != bool(locale):
+        raise ValueError("Catalog provider and locale must be selected together")
+    if card_id and (provider != "TCGdex" or not locale or not all(str(data.get(field) or "").strip() for field in ("set_id", "set_name", "card_number"))):
+        raise ValueError("Catalog card ID requires its provider, locale, set, and card number")
+    if not card_id and has_set_data:
+        raise ValueError("Catalog set, number, and image data require a catalog card ID")
 
 
 def _match_text(value):
@@ -168,20 +207,21 @@ def match_scrydex_card(tcgdex_card, response):
     return {"card_id": card_id, "image_url": image} if card_id and valid_catalog_image_url(image) and path == f"/pokemon/{card_id}/large" else None
 
 
-def resolve_scrydex_image(tcgdex_id):
+def resolve_scrydex_image(tcgdex_id, provider="TCGdex", locale="en"):
     tcgdex_id = str(tcgdex_id or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", tcgdex_id):
+    if provider != "TCGdex" or locale not in TCGDEX_LOCALES or locale != "en" or not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", tcgdex_id):
         return None
-    if tcgdex_id in _scrydex_image_cache:
-        return _scrydex_image_cache[tcgdex_id]
+    cache_key = (provider, locale, tcgdex_id)
+    if cache_key in _scrydex_image_cache:
+        return _scrydex_image_cache[cache_key]
     try:
-        request = urllib.request.Request(f"https://api.tcgdex.net/v2/en/cards/{urllib.parse.quote(tcgdex_id, safe='')}", headers={"User-Agent": "PokemonBinder/1.0"})
+        request = urllib.request.Request(f"https://api.tcgdex.net/v2/{locale}/cards/{urllib.parse.quote(tcgdex_id, safe='')}", headers={"User-Agent": "PokemonBinder/1.0"})
         with urllib.request.urlopen(request, timeout=8) as response:
             tcgdex_card = json.loads(response.read().decode("utf-8"))
         set_name = str((tcgdex_card.get("set") or {}).get("name") or "").strip()
         number = _number_key(tcgdex_card.get("localId"))
         if not set_name or not number:
-            _scrydex_image_cache[tcgdex_id] = None
+            _scrydex_image_cache[cache_key] = None
             return None
         escaped_set_name = set_name.replace("\\", "\\\\").replace('"', '\\"')
         query = f'!expansion.name:"{escaped_set_name}" !number:"{number}"'
@@ -198,7 +238,7 @@ def resolve_scrydex_image(tcgdex_id):
         with urllib.request.urlopen(request, timeout=8) as response:
             catalog = json.loads(response.read().decode("utf-8"))
         match = match_scrydex_card(tcgdex_card, catalog)
-        _scrydex_image_cache[tcgdex_id] = match
+        _scrydex_image_cache[cache_key] = match
         return match
     except (OSError, ValueError, json.JSONDecodeError):
         return None
@@ -318,7 +358,9 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path == '/api/update-card':
             self.handle_update_card(data)
         elif path == '/api/catalog-image-fallback':
-            match = resolve_scrydex_image(data.get("tcgdex_card_id"))
+            provider = data.get("catalog_provider", "TCGdex")
+            locale = data.get("catalog_locale", "en")
+            match = resolve_scrydex_image(data.get("tcgdex_card_id"), provider, locale) if provider == "TCGdex" and locale == "en" else None
             self.send_json({"success": True, "match": match})
         elif path == '/api/remove':
             self.handle_remove_card(data)
@@ -570,9 +612,15 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     @collection_locked
     def handle_add_card(self, data):
         # Validate data
-        name = data.get("name", "").strip().lower()
+        name = str(data.get("name") or "").strip()
         if not name:
             self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
+            return
+        try:
+            identity_fields = card_identity_fields(data)
+            validate_catalog_printing(data, identity_fields)
+        except ValueError as e:
+            self.send_json({"success": False, "error": str(e)}, status=400)
             return
             
         dex_value = data.get("dex_id", 0)
@@ -601,8 +649,11 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         image_url = data.get("image_url", "").strip()
         image_source = str(data.get("image_source") or "").strip()
         image_match_id = str(data.get("image_match_id") or "").strip()
-        image_url, image_source, image_match_id = valid_catalog_image_metadata(image_url, image_source, image_match_id)
+        image_url, image_source, image_match_id = valid_catalog_image_metadata(
+            image_url, image_source, image_match_id, identity_fields["Catalog Locale"]
+        )
         catalog_fields = {
+            **identity_fields,
             "Catalog Card ID": str(data.get("catalog_card_id") or "").strip(),
             "Set ID": str(data.get("set_id") or "").strip(),
             "Set Name": str(data.get("set_name") or "").strip(),
@@ -705,12 +756,29 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         card = matches[0]
-        if "name" in data:
-            name = str(data.get("name") or "").strip()
-            if not name:
-                self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
-                return
-            card["Name"] = name
+        try:
+            identity_fields = card_identity_fields(data)
+        except ValueError as e:
+            self.send_json({"success": False, "error": str(e)}, status=400)
+            return
+        identity_changed = False
+        for field, key in (("Name", "name"), ("Species Name", "species_name"), ("Form", "form"),
+                           ("Card Language", "card_language"), ("Catalog Provider", "catalog_provider"),
+                           ("Catalog Locale", "catalog_locale"), ("Catalog Variant", "catalog_variant")):
+            if key in data:
+                value = str(data.get(key) or "").strip() if field == "Name" else identity_fields.get(field, "")
+                if field == "Name" and not value:
+                    self.send_json({"success": False, "error": "Pokémon name cannot be empty"}, status=400)
+                    return
+                identity_changed |= value != str(card.get(field) or "").strip()
+                card[field] = value
+        for field, (key, _) in {
+            "Species Name": ("species_name", 80), "Form": ("form", 80),
+            "Card Language": ("card_language", 40), "Catalog Provider": ("catalog_provider", 40),
+            "Catalog Locale": ("catalog_locale", 12), "Catalog Variant": ("catalog_variant", 80),
+        }.items():
+            if key in data and field != "Name":
+                card[field] = identity_fields[field]
         if "dex_id" in data:
             try:
                 dex_id = int(data.get("dex_id") or 0)
@@ -719,6 +787,7 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 self.send_json({"success": False, "error": "Pokédex number must be zero or greater"}, status=400)
                 return
+            identity_changed |= dex_id != int(card.get("Dex Number") or 0)
             card["Dex Number"] = dex_id
         if "date_added" in data:
             date_added = str(data.get("date_added") or "").strip().replace("T", " ")
@@ -762,17 +831,38 @@ class BinderHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             card["Grade Details"] = ""
         if "notes" in data:
             card["Notes"] = str(data.get("notes") or "").strip()
-        catalog_fields = ("catalog_card_id", "set_id", "set_name", "card_number", "catalog_rarity", "image_url", "image_source", "image_match_id")
+        catalog_fields = ("catalog_card_id", "set_id", "set_name", "card_number", "catalog_variant", "catalog_rarity", "image_url", "image_source", "image_match_id")
         if any(field in data for field in catalog_fields):
-            for field, column in (("catalog_card_id", "Catalog Card ID"), ("set_id", "Set ID"), ("set_name", "Set Name"), ("card_number", "Card Number"), ("catalog_rarity", "Catalog Rarity")):
+            for field, column in (("catalog_card_id", "Catalog Card ID"), ("set_id", "Set ID"), ("set_name", "Set Name"), ("card_number", "Card Number"), ("catalog_variant", "Catalog Variant"), ("catalog_rarity", "Catalog Rarity")):
                 if field in data:
                     card[column] = str(data.get(field) or "").strip()
             if any(field in data for field in ("image_url", "image_source", "image_match_id")):
                 image_url = str(data.get("image_url", card.get("Image URL", "")) or "").strip()
                 image_source = str(data.get("image_source", card.get("Image Source", "")) or "").strip()
                 image_match_id = str(data.get("image_match_id", card.get("Image Match ID", "")) or "").strip()
-                image_url, image_source, image_match_id = valid_catalog_image_metadata(image_url, image_source, image_match_id)
+                image_url, image_source, image_match_id = valid_catalog_image_metadata(
+                    image_url, image_source, image_match_id, card.get("Catalog Locale", "")
+                )
                 card.update({"Image URL": image_url, "Image Source": image_source, "Image Match ID": image_match_id})
+        if any(field in data for field in catalog_fields) or any(field in data for field in ("catalog_provider", "catalog_locale")):
+            merged_printing = {
+                "catalog_card_id": card.get("Catalog Card ID", ""),
+                "set_id": card.get("Set ID", ""), "set_name": card.get("Set Name", ""),
+                "card_number": card.get("Card Number", ""), "catalog_rarity": card.get("Catalog Rarity", ""),
+                "image_url": card.get("Image URL", ""), "image_source": card.get("Image Source", ""),
+                "image_match_id": card.get("Image Match ID", ""),
+            }
+            try:
+                validate_catalog_printing(merged_printing, {
+                    "Catalog Provider": card.get("Catalog Provider", ""),
+                    "Catalog Locale": card.get("Catalog Locale", ""),
+                })
+            except ValueError as e:
+                self.send_json({"success": False, "error": str(e)}, status=400)
+                return
+        if identity_changed and not str(data.get("catalog_card_id") or "").strip():
+            for field in ("Catalog Provider", "Catalog Locale", "Catalog Card ID", "Set ID", "Set Name", "Card Number", "Catalog Variant", "Catalog Rarity", "Image URL", "Image Source", "Image Match ID"):
+                card[field] = ""
         if pokemon_binder.save_collection(collection):
             config = pokemon_binder.load_config()
             gsheet_success, gsheet_msg = True, ""

@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.pokemongrader.data.Card
+import com.example.pokemongrader.data.printIdentityKey
 import com.example.pokemongrader.data.DataRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -300,6 +301,8 @@ fun MainScreen(
     onActiveTabChange: (String) -> Unit,
     currentPage: Int,
     onCurrentPageChange: (Int) -> Unit,
+    marketCardToOpen: Card? = null,
+    onMarketCardConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val cards by repository.cards.collectAsStateWithLifecycle()
@@ -313,6 +316,12 @@ fun MainScreen(
     val coroutineScope = rememberCoroutineScope()
     val marketModel: MarketViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val marketState by marketModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(marketCardToOpen) {
+        marketCardToOpen?.let {
+            marketModel.openCard(it)
+            onMarketCardConsumed()
+        }
+    }
     val navigationColors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White,
         unselectedIconColor = Color.LightGray, indicatorColor = Color(0xFF1E293B))
     BackHandler(activeTab != "binder") { onActiveTabChange("binder") }
@@ -331,7 +340,9 @@ fun MainScreen(
 
         if (searchQuery.isNotBlank()) {
             val q = searchQuery.lowercase().trim()
-            list = list.filter { it.name.lowercase().contains(q) || it.notes.lowercase().contains(q) }
+            list = list.filter { listOf(it.name, it.speciesName, it.form, it.cardLanguage, it.catalogProvider,
+                it.catalogLocale, it.catalogCardId, it.setName, it.cardNumber, it.catalogVariant, it.notes)
+                .any { value -> value.lowercase().contains(q) } }
         }
 
         if (selectedRarityFilter != "All") {
@@ -339,7 +350,7 @@ fun MainScreen(
         }
 
         if (!showRepeated) {
-            val grouped = list.groupBy { if (it.dexNumber != 0) it.dexNumber else it.name.lowercase() }
+            val grouped = list.groupBy { it.printIdentityKey() }
             list = grouped.map { entry ->
                 entry.value.minByOrNull { getRarityRank(it.type) }!!
             }
