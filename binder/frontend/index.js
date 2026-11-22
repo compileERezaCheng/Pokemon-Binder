@@ -1924,9 +1924,11 @@ function filterCollectionCards(cards, { searchVal = "", condVal = "", typeFilter
         "Secret Rare", "Ultra Rare", "Double Rare", "Shiny Rare",
         "Reverse Holo", "Holofoil Rare", "Rare", "Normal"
     ];
+    const unknownRank = sortBy === "rarity" ? RARITY_ORDER.length - 1 : RARITY_ORDER.length;
     const rarityRank = card => {
-        const rank = RARITY_ORDER.indexOf(card.Type || "Normal");
-        return rank === -1 ? RARITY_ORDER.length : rank;
+        const type = String(card.Type || "Normal").trim().replace(/\s+/g, " ").toLowerCase();
+        const rank = RARITY_ORDER.findIndex(rarity => rarity.toLowerCase() === type);
+        return rank === -1 ? unknownRank : rank;
     };
 
     filtered.sort((a, b) => {
@@ -1937,11 +1939,7 @@ function filterCollectionCards(cards, { searchVal = "", condVal = "", typeFilter
             return (parseInt(a["Dex Number"]) || 9999) - (parseInt(b["Dex Number"]) || 9999) || rarityRank(a) - rarityRank(b);
         }
         if (sortBy === "rarity") {
-            const rank = card => {
-                const value = RARITY_ORDER.indexOf(card.Type || "Normal");
-                return value === -1 ? RARITY_ORDER.length - 1 : value;
-            };
-            return rank(a) - rank(b) || a.Name.localeCompare(b.Name);
+            return rarityRank(a) - rarityRank(b) || a.Name.localeCompare(b.Name);
         }
         if (sortBy === "name") return a.Name.localeCompare(b.Name);
         if (sortBy === "date") return new Date(b["Date Added"] || 0) - new Date(a["Date Added"] || 0);

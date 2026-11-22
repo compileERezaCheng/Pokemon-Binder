@@ -79,8 +79,11 @@ val RarityOrder = listOf(
     "Reverse Holo", "Holofoil Rare", "Rare", "Normal"
 )
 
+private val rarityWhitespace = Regex("\\s+")
+
 fun getRarityRank(rarity: String): Int {
-    val idx = RarityOrder.indexOf(rarity)
+    val normalized = rarity.trim().replace(rarityWhitespace, " ")
+    val idx = RarityOrder.indexOfFirst { it.equals(normalized, ignoreCase = true) }
     return if (idx == -1) RarityOrder.size else idx
 }
 

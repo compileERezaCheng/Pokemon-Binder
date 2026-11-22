@@ -565,6 +565,23 @@ test('search, filters, sorting, and repeated-card toggle preserve binder list be
     assert.equal(api.filterCollectionCards(printings, { searchVal: 'Japanese', sortBy: 'dex' })[0].Name, 'ピカチュウ');
 });
 
+test('rarity sort groups catalog and manual rarities with name tiebreaks', () => {
+    const api = loadApp();
+    const cards = [
+        { Name: 'Golurk', Type: 'Double rare' },
+        { Name: 'Mew' },
+        { Name: 'Watchog', Type: 'Illustration Rare' },
+        { Name: 'Sprigatito', Type: 'Illustration rare' },
+        { Name: 'Spewpa', Type: ' iLLustration  rare ' }, // Synthetic spacing variant.
+        { Name: 'Absol', Type: 'Unknown' },
+        { Name: 'Zubat', Type: '' }
+    ];
+    const sorted = api.filterCollectionCards(cards, { sortBy: 'rarity', showRepeated: true });
+    assert.deepEqual(Array.from(sorted, card => card.Name), [
+        'Spewpa', 'Sprigatito', 'Watchog', 'Golurk', 'Absol', 'Mew', 'Zubat'
+    ]);
+});
+
 test('binder navigation clamps the first spread and maps entered pages to their spread', () => {
     const api = loadApp();
     api.stubRender();

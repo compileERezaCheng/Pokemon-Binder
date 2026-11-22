@@ -144,6 +144,36 @@ class MainScreenTest {
   }
 
   @Test
+  fun raritySortGroupsCatalogAndManualRaritiesAndReordersNewCards() {
+    val savedCards = Card.parseCollection("""
+      [
+        {"Name":"golurk","Type":"Double rare"},
+        {"Name":"mew"},
+        {"Name":"watchog","Type":"Illustration Rare"},
+        {"Name":"sprigatito","Type":"Illustration rare"},
+        {"Name":"absol","Type":"Unknown"}
+      ]
+    """.trimIndent())
+    showMain(savedCards)
+    composeTestRule.onNodeWithContentDescription("Collection/Search").performClick()
+    composeTestRule.onNodeWithText("Dex Number").performClick()
+    composeTestRule.onNodeWithText("Rarity").performClick()
+
+    fun assertOrder(vararg names: String) {
+      val displayedOrder = names.sortedBy {
+        composeTestRule.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top
+      }
+      assertEquals(names.toList(), displayedOrder)
+    }
+
+    assertOrder("Sprigatito", "Watchog", "Golurk", "Mew", "Absol")
+
+    // Synthetic spacing variant to exercise a fresh collection emission.
+    fakeRepository.emitCards(savedCards + testCard("spewpa", 0, " iLLustration  rare "))
+    assertOrder("Spewpa", "Sprigatito", "Watchog", "Golurk")
+  }
+
+  @Test
   fun binderSwipeAndEmptySlotPrefillNavigateCorrectly() {
     showMain()
     composeTestRule.onNodeWithText("Slot 1").performTouchInput { swipeLeft() }
@@ -326,6 +356,7 @@ private class FakeDataRepository(initialCards: List<Card>) : DataRepository {
 
   private val _cards = MutableStateFlow(initialCards)
   override val cards: StateFlow<List<Card>> = _cards.asStateFlow()
+  fun emitCards(cards: List<Card>) { _cards.value = cards }
 
   private val _isLoading = MutableStateFlow(false)
   override val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
